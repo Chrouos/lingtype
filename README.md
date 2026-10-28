@@ -4,6 +4,8 @@
 
 ## 本機執行
 
+在專案資料夾執行：
+
 ```sh
 python -m http.server 8765 --directory site
 ```
@@ -17,3 +19,4 @@ node --test test/typing.test.mjs
 ```
 
 教材目前為手動整理的原創範例；上傳、分享與自動翻譯預留未來擴充。
+
