@@ -1,7 +1,161 @@
 <!doctype html>
-<html lang="zh-Hant"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#11171b"><title>type / learn — 打字，然後理解</title><link rel="stylesheet" href="style.css"></head>
-<body><div class="shell"><header class="header"><a class="brand" href="."><span class="brand-icon">⌘</span><span>type<span class="brand-slash">/</span>learn<small>LANGUAGE PRACTICE</small></span></a><div class="header-right"><span class="status"><i></i> READY TO LEARN</span><label class="language-label">翻譯語言 <select id="language" aria-label="翻譯語言"><option value="zh">繁體中文</option><option value="ja">日本語</option><option value="ko">한국어</option></select></label></div></header>
-<main><div class="intro"><div><p class="eyebrow"><span>01</span> &nbsp; YOUR DAILY PRACTICE</p><h1>打字，然後理解<span>.</span></h1><p class="subtitle">從一個單字開始，慢慢讀懂一整篇文章。</p></div><div class="intro-mark" aria-hidden="true">Aa<span>_</span></div></div>
-<section class="workspace" aria-label="打字練習"><div class="toolbar"><div class="mode-switch" role="group" aria-label="練習模式"><button id="word-mode" class="mode active">單字練習 <span>WORDS</span></button><button id="article-mode" class="mode">文章練習 <span>ARTICLE</span></button></div><label class="lesson-select"><span>目前教材</span><select id="lesson" aria-label="選擇教材"></select></label></div>
-<div class="practice-meta"><span id="category"></span><span id="progress"></span></div><div class="practice" id="practice"><div id="exercise"></div><div id="result" hidden></div></div><div class="workspace-footer"><span><span class="keyboard">⌨</span> <span id="hint">開始輸入，即開始計時</span></span><button class="reset" id="restart" type="button">↻ <span>重新開始</span></button></div></section>
-<div class="bottom-note"><span><b>HOW IT WORKS</b> &nbsp; 先練重點單字，再讀懂完整文章。</span><span>TAKE YOUR TIME <span class="spark">✳</span></span></div></main><footer><span>TYPE A LITTLE, LEARN A LOT.</span><span>MADE FOR CURIOUS MINDS ↗</span></footer></div><script type="module" src="app.mjs"></script></body></html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#f4f5f7">
+<meta name="theme-color" content="#111214" media="(prefers-color-scheme: dark)">
+<title>Lingtype</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip-link" href="#main-content" data-i18n="skip">跳到主要內容</a>
+<header class="bar">
+  <div class="bar-inner">
+    <a class="brand" href="#practice" id="brand"><svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true"><rect x="1" y="3" width="22" height="18" rx="5"/><rect class="brand-caret" x="10.5" y="7.5" width="3" height="9" rx="1"/></svg><span>Lingtype</span></a>
+    <nav class="nav" data-i18n-aria="nav.label" aria-label="主要功能">
+      <button id="nav-practice" type="button" aria-current="page" data-i18n="nav.practice">練習</button>
+      <button id="nav-import" type="button" data-i18n="nav.import">匯入</button>
+      <button id="nav-notebook" type="button" data-i18n="nav.notebook">單字本</button>
+      <button id="nav-public" type="button" data-i18n="nav.public">公開</button>
+      <button id="nav-history" type="button" data-i18n="nav.history">紀錄</button>
+    </nav>
+    <label class="lang"><span class="sr-only" data-i18n="language">語言</span><select id="language"><option value="zh">繁體中文</option><option value="ja">日本語</option><option value="ko">한국어</option></select></label>
+  </div>
+</header>
+
+<main id="main-content" tabindex="-1">
+  <div id="view-practice" class="view">
+    <p id="workspace-notice" class="notice" role="status" hidden></p>
+    <p id="session-toast" class="toast" role="status" hidden></p>
+    <div class="practice-head">
+      <h1 class="lesson-heading"><label class="sr-only" for="lesson" data-i18n="lesson">教材</label><select id="lesson"></select></h1>
+      <div class="segmented" role="group" data-i18n-aria="mode.label" aria-label="練習模式">
+        <button id="article-mode" type="button" class="mode active" data-i18n="mode.article">文章</button>
+        <button id="word-mode" type="button" class="mode" data-i18n="mode.word">單字</button>
+      </div>
+    </div>
+    <div class="scope">
+      <span id="category" hidden></span>
+      <label id="section-label" class="chip-select" hidden><span class="sr-only" data-i18n="section">章節</span><select id="section-mode"><option value="all" data-i18n="section.all">全部章節</option></select></label>
+      <label id="passage-label" class="chip-select" hidden><span class="sr-only" data-i18n="passage">範圍</span><select id="passage-mode"><option value="full" data-i18n="passage.full">全文</option><option value="random" data-i18n="passage.random">隨機段落</option></select></label>
+      <span id="source-info" class="source" hidden></span>
+    </div>
+
+    <section class="workspace" data-i18n-aria="nav.practice" aria-label="練習">
+      <div class="workspace-head">
+        <div class="metrics">
+          <div class="metric"><span data-i18n="metric.time">時間</span><strong id="live-time">0:00</strong></div>
+          <div class="metric"><span data-i18n="metric.wpm">WPM</span><strong id="live-wpm">0</strong></div>
+          <div class="metric"><span id="live-accuracy-label" data-i18n="metric.accuracy">正確率</span><strong id="live-accuracy">0%</strong></div>
+          <div class="metric"><span data-i18n="metric.progress">進度</span><strong id="live-progress">0%</strong></div>
+          <span id="progress" class="counter"></span>
+          <div class="actions">
+            <button class="btn" id="finish-now" type="button"><span data-i18n="action.finish">結束</span><kbd>Esc</kbd></button>
+            <button class="btn" id="pause" type="button" data-i18n="action.pause">暫停</button>
+            <button class="btn" id="restart" type="button" data-i18n="action.restart">重新開始</button>
+            <details class="menu" id="more-menu">
+              <summary class="btn" data-i18n="action.more">更多</summary>
+              <div class="menu-list">
+                <button id="export-workbook" type="button" data-i18n="action.export">匯出練習冊</button>
+                <button id="publish-workbook" type="button" data-i18n="action.publish">公開分享</button>
+                <button id="delete-lesson" type="button" class="danger" hidden data-i18n="action.delete">刪除教材</button>
+              </div>
+            </details>
+          </div>
+        </div>
+        <progress id="progress-bar" max="100" value="0" data-i18n-aria="metric.progress" aria-label="進度"></progress>
+        <p id="hint" class="hint" aria-live="polite"></p>
+      </div>
+      <div class="practice" id="practice"><div id="exercise"></div><div id="result" hidden></div></div>
+    </section>
+
+    <section class="panel vocab" id="lesson-vocab" hidden aria-labelledby="vocab-heading">
+      <h2 id="vocab-heading"><span data-i18n="vocab.title">本課單字</span><span class="count" id="vocab-count"></span></h2>
+      <dl id="vocab-list" class="vocab-list"></dl>
+    </section>
+
+    <details class="panel word-picker" id="word-picker" hidden>
+      <summary><span data-i18n="picker.title">挑選單字</span><span class="count" id="picker-count"></span></summary>
+      <div class="picker-body">
+        <input id="word-search" type="search" autocomplete="off" data-i18n-placeholder="picker.search" data-i18n-aria="picker.search" placeholder="搜尋文章中的單字" aria-label="搜尋文章中的單字">
+        <div id="word-candidates" class="candidates"></div>
+        <div class="pager">
+          <button class="btn-quiet" id="candidate-prev" type="button" data-i18n="picker.prev">上一批</button>
+          <span id="candidate-page" class="pager-count"></span>
+          <button class="btn-quiet" id="candidate-next" type="button" data-i18n="picker.next">下一批</button>
+          <button class="btn-quiet" id="known-reset" type="button" data-i18n="picker.resetKnown">顯示已認識的字</button>
+        </div>
+        <div class="picker-foot">
+          <p id="selected-words" class="selected" aria-live="polite"></p>
+          <button class="btn primary" id="picker-start" type="button" disabled data-i18n="picker.start">練習選取的單字</button>
+        </div>
+      </div>
+    </details>
+  </div>
+
+  <section id="view-import" class="view narrow" hidden aria-labelledby="import-title-heading">
+    <h1 id="import-title-heading" data-i18n="import.title">匯入教材</h1>
+    <p class="import-lead" data-i18n="import.lead">從影片、網頁或文件匯入，邊讀邊打字。</p>
+    <form id="arxiv-form" class="url-row">
+      <input id="arxiv-url" type="url" required data-i18n-placeholder="import.urlPh" data-i18n-aria="import.urlPh" placeholder="貼上 YouTube、網頁文章或 arXiv 網址" aria-label="貼上 YouTube、網頁文章或 arXiv 網址">
+      <button class="btn primary" type="submit" id="arxiv-submit" data-i18n="import.urlSubmit">匯入</button>
+    </form>
+    <p id="arxiv-message" class="message" role="status"></p>
+    <label class="dropzone" id="dropzone">
+      <input id="document-file" type="file" accept=".txt,.md,.markdown,.pdf,.docx,.epub,.html,.htm,.srt,.vtt,.json" aria-describedby="dropzone-formats">
+      <strong data-i18n="import.drop">拖曳檔案到這裡，或點一下選擇</strong>
+      <span id="dropzone-formats" data-i18n="import.formats">PDF · Word · EPUB · TXT · Markdown · HTML · SRT / VTT 字幕 · Lingtype 練習冊，20 MB 以內</span>
+    </label>
+    <p id="workbook-message" class="message" role="status"></p>
+    <h2 class="paste-heading" data-i18n="import.paste">或直接貼上文字</h2>
+    <form id="import-form" class="form form-card">
+      <label class="field"><span data-i18n="import.name">名稱</span><input id="import-title" maxlength="100" data-i18n-placeholder="import.namePh" placeholder="例如：TED 演講"></label>
+      <label class="field"><span data-i18n="import.text">英文原文</span><textarea id="import-text" required rows="8" data-i18n-placeholder="import.textPh" placeholder="貼上英文文章或逐字稿"></textarea></label>
+      <label class="field"><span data-i18n="import.translation">翻譯（選填）</span><textarea id="import-translation" rows="3" data-i18n-placeholder="import.translationPh" placeholder="貼上全文翻譯"></textarea></label>
+      <div class="form-foot"><button class="btn primary" type="submit" data-i18n="import.save">儲存並開始</button><span id="import-message" class="message" role="status"></span></div>
+    </form>
+    <p class="muted small note" data-i18n="import.note">教材只存在這個瀏覽器；翻譯時文字會送到 Google 翻譯。</p>
+  </section>
+
+  <section id="view-notebook" class="view" hidden aria-labelledby="notebook-heading">
+    <div class="notebook-head">
+      <h1 id="notebook-heading"><span data-i18n="notebook.title">單字本</span><span class="count" id="notebook-count"></span></h1>
+      <div class="actions">
+        <button class="btn primary" id="notebook-words" type="button" data-i18n="notebook.practiceWords">練習單字</button>
+        <button class="btn" id="notebook-sentences" type="button" data-i18n="notebook.practiceSentences">練習例句</button>
+      </div>
+    </div>
+    <ul id="notebook-list" class="notebook-list"></ul>
+  </section>
+
+  <section id="view-public" class="view narrow" hidden aria-labelledby="public-heading">
+    <h1 id="public-heading" data-i18n="public.title">公開練習冊</h1>
+    <div id="public-detail" class="card public-detail" hidden></div>
+    <p id="public-message" class="message" role="status"></p>
+    <ul id="public-books" class="rows"></ul>
+    <details class="panel">
+      <summary data-i18n="public.unpublish">用下架碼下架</summary>
+      <form id="unpublish-form" class="form inline-form">
+        <label class="field"><span data-i18n="public.id">分享網址或 ID</span><input id="unpublish-id" required></label>
+        <label class="field"><span data-i18n="public.key">下架碼</span><input id="unpublish-key" required autocomplete="off"></label>
+        <div class="form-foot"><button class="btn" type="submit" data-i18n="public.remove">下架</button><span id="unpublish-message" class="message" role="status"></span></div>
+      </form>
+    </details>
+  </section>
+
+  <section id="view-history" class="view narrow" hidden aria-labelledby="history-heading">
+    <h1 id="history-heading" data-i18n="history.title">練習紀錄</h1>
+    <div class="card table-card">
+      <table class="history">
+        <thead><tr><th data-i18n="history.lesson">教材</th><th data-i18n="history.mode">模式</th><th data-i18n="history.date">日期</th><th class="num" data-i18n="metric.wpm">WPM</th><th class="num" data-i18n="history.score">正確率／錯誤</th><th class="num" data-i18n="metric.time">時間</th></tr></thead>
+        <tbody id="history-list"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+<script type="module" src="app.mjs"></script>
+</body>
+</html>

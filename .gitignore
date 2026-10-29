@@ -2,3 +2,10 @@
 site/.openai/
 site/dist/
 site/site/
+__pycache__/
+*.pyc
+.deps/
+.lingtype/
+.taste-skill/
+.agents/
+.claude/
