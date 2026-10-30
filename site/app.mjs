@@ -10,6 +10,8 @@ import { sentenceAt, advanceSentenceInput, passageTranslations, separatorPositio
 import { createWorkbook, readWorkbook, selectedArticleWords } from './workbook.mjs';
 import { parseSubtitles } from './subtitles.mjs';
 import { translate, applyStatic, pickLanguage, dateLocale, languages } from './i18n.mjs';
+import { setupLessonPreview } from './lesson-preview.mjs';
+import { createTranslationCache } from './translation-cache.mjs';
 
 const $ = (id) => document.getElementById(id);
 const lessonSelect = $('lesson'), language = $('language'), exercise = $('exercise'), result = $('result');
@@ -40,6 +42,12 @@ let paintResult = null, hintKey = null, resultKeys = null;
 const newSession = () => ({ pieces:0, correct:0, total:0, time:0, wrong:new Set() });
 let session = newSession(), keepSession = false, toastTimer = null;
 const translationCache = (() => { try { return JSON.parse(globalThis.localStorage?.getItem('lingtype-translations') || '{}'); } catch { return {}; } })();
+const translationService = createTranslationCache(globalThis.localStorage, async (sentences, selectedLanguage) => {
+  const response = await fetch('/api/translate', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ language:selectedLanguage, sentences }) });
+  const data = await response.json();
+  if (!response.ok || !Array.isArray(data.translations) || data.translations.length !== sentences.length) throw new Error(data.error || 'translate');
+  return data.translations;
+}, translationCache);
 for (const item of lessons) { const words = readBuiltinWords(globalThis.localStorage, item.id); if (words) item.words = words; }
 lessons.push(...readCustomLessons(globalThis.localStorage));
 function persistLibrary() { try { globalThis.localStorage?.setItem('lingtype-custom-lessons', JSON.stringify(lessons.filter(item => item.custom))); return true; } catch { return false; } }
@@ -65,7 +73,7 @@ function noteWords({ add = [], remove = [], text = articleText } = {}) {
     notebook = addWord(notebook, { word, sentence:sentenceWith(text, word), source:item.notebook ? '' : item.title, translations:known ? { zh:known[1], ja:known[2], ko:known[3] } : {} });
   }
   for (const word of remove) notebook = removeWord(notebook, word);
-  saveNotebook(globalThis.localStorage, notebook);
+  if (!saveNotebook(globalThis.localStorage, notebook)) setHint('result.pickStorage');
   syncNotebookLesson();
   renderNotebook();
 }
@@ -73,6 +81,7 @@ function updateLessonOptions() { lessonSelect.innerHTML = ''; lessons.forEach((i
 updateLessonOptions();
 syncNotebookLesson();
 const lesson = () => lessons[Number(lessonSelect.value)];
+let lessonPreview = null;
 function updateSections() {
   const sectionSelect = $('section-mode'), current = sectionSelect.value; sectionSelect.innerHTML = '';
   // A long document is practised one part at a time; drawing all of it at once would slow typing.
@@ -162,9 +171,8 @@ function render() {
 async function prepareTranslation() {
   const run = ++translationRun, currentLanguage = language.value;
   const sentences = articleSentences.map(sentence => sentence.trim());
-  const keyOf = sentence => `${currentLanguage}\u0000${sentence}`;
-  const usable = sentence => typeof translationCache[keyOf(sentence)] === 'string' && translationCache[keyOf(sentence)].trim() && translationCache[keyOf(sentence)].trim() !== sentence;
-  const fill = () => { sentenceTranslations = sentences.map(sentence => usable(sentence) ? translationCache[keyOf(sentence)] : ''); };
+  const usable = sentence => translationService.get(sentence, currentLanguage);
+  const fill = () => { sentenceTranslations = sentences.map(sentence => usable(sentence)); };
   // Translate from the current sentence onward in small batches, so the text being typed fills in first.
   const current = sentenceAt(articleSentences, input.length).index;
   const order = [...sentences.slice(current), ...sentences.slice(0, current)];
@@ -176,13 +184,8 @@ async function prepareTranslation() {
   let failed = false;
   for (let offset = 0; offset < missing.length; offset += 8) {
     const batch = missing.slice(offset, offset + 8);
-    try {
-      const response = await fetch('/api/translate', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ language:currentLanguage, sentences:batch }) });
-      const data = await response.json();
-      if (!response.ok || !Array.isArray(data.translations) || data.translations.length !== batch.length) throw new Error(data.error || 'translate');
-      batch.forEach((sentence, i) => { const value = data.translations[i]; if (typeof value === 'string' && value.trim() && value.trim() !== sentence) translationCache[keyOf(sentence)] = value; });
-      try { globalThis.localStorage?.setItem('lingtype-translations', JSON.stringify(translationCache)); } catch { /* keep in memory */ }
-    } catch { failed = true; }
+    const values = await translationService.translate(batch, currentLanguage);
+    if (values.some(value => !value)) failed = true;
     if (run !== translationRun || mode !== 'article' || finished) return;
     fill(); paintArticle();
     if (failed) break;
@@ -278,14 +281,11 @@ function sentenceHtml(index, current) {
   }
   return `<span class="s ${index === current ? 'current-sentence' : 'done-sentence'}">${html}</span>${space}`;
 }
-// The whole text reads like a book: each English paragraph followed by its translation.
+// Show the current sentence and its translation as the reader advances.
 function paintArticle() {
-  const piece = sentenceAt(articleSentences, input.length), joiner = language.value === 'ko' ? ' ' : '';
-  $('article-text').innerHTML = articleBlocks.map(block => {
-    const state = piece.index < block[0] ? 'upcoming' : piece.index > block[block.length - 1] ? 'done' : 'current';
-    const translated = block.map(index => sentenceTranslations?.[index] ? `<span${index === piece.index ? ' class="now"' : ''}>${escapeHtml(sentenceTranslations[index])}</span>` : '').filter(Boolean).join(joiner);
-    return `<section class="para ${state}"><p class="en">${block.map(index => sentenceHtml(index, piece.index)).join('')}</p>${translated ? `<p class="tr">${translated}</p>` : ''}</section>`;
-  }).join('');
+  const piece = sentenceAt(articleSentences, input.length);
+  const translated = sentenceTranslations?.[piece.index];
+  $('article-text').innerHTML = `<section class="para current"><p class="en">${sentenceHtml(piece.index, piece.index)}</p>${translated ? `<p class="tr"><span class="now">${escapeHtml(translated)}</span></p>` : ''}</section>`;
   const whole = $('article-translation');
   whole.hidden = Boolean(sentenceTranslations?.some(Boolean)) || !whole.textContent;
   $('progress').textContent = t('progress.sentence', { i:piece.index + 1, n:articleSentences.length });
@@ -324,7 +324,8 @@ function finish(early = false) {
   const record = { lessonId:lesson().id, title:lesson().title, mode, passage:passageId(mode === 'article' ? articleText : currentWords().map(w => w[0]).join(' ')), wpm:resultStats?.wpm ?? wordWpm, accuracy:resultStats?.accuracy ?? null, errors:mode === 'word' ? errors : resultStats.errors, elapsed:time, date:new Date().toISOString(), ...(early ? { partial:true } : {}) };
   const previous = comparison(readHistory(globalThis.localStorage), record);
   const best = Math.max(bestResult(globalThis.localStorage, record) ?? 0, record.wpm);
-  const stored = saveBest(globalThis.localStorage, record) && saveResult(globalThis.localStorage, record);
+  const hasProgress = mode === 'article' ? input.length > 0 : wordIndex > 0 || input.length > 0;
+  const stored = !hasProgress || (saveBest(globalThis.localStorage, record) && saveResult(globalThis.localStorage, record));
   notePractice(mode === 'word' ? currentWords().slice(0, early ? wordIndex : undefined).map(word => word[0]) : articleWords(early ? articleText.slice(0, input.length) : articleText));
   const wordCount = currentWords().length, practicedText = articleText;
   const multi = mode === 'article' && session.pieces > 0;
@@ -400,21 +401,9 @@ function articleContinuation() {
   if (section && Number(sectionValue) + 1 < item.sections.length) return { kind:'passage', run:() => { $('section-mode').value = String(Number(sectionValue) + 1); pickerPage = 0; loadPractice(); } };
   return { kind:'lesson', run:() => { lessonSelect.value = String((Number(lessonSelect.value) + 1) % lessons.length); updateSections(); pickerPage = 0; loadPractice(); } };
 }
-// A finished text is recorded on its own, then the next one opens at once and the session keeps adding up.
+// Finish this passage before offering another one.
 function completeArticle() {
-  const time = elapsed(), stats = articleResult(articleText, input, time, autoSeparators), counts = typedCounts(articleText, input, autoSeparators);
-  const record = { lessonId:lesson().id, title:lesson().title, mode:'article', passage:passageId(articleText), wpm:stats.wpm, accuracy:stats.accuracy, errors:stats.errors, elapsed:time, date:new Date().toISOString() };
-  saveBest(globalThis.localStorage, record); saveResult(globalThis.localStorage, record); renderHistory();
-  notePractice(articleWords(articleText));
-  clearSnapshot(globalThis.localStorage, activeKey);
-  session.pieces++; session.correct += counts.correct; session.total += counts.total; session.time += time;
-  wrongWords.forEach(word => session.wrong.add(word));
-  const next = articleContinuation();
-  keepSession = true;
-  try { next.run(); } finally { keepSession = false; }
-  announce(next.kind === 'lesson' ? t('session.next', { title:lesson().title }) : t('session.nextPassage'));
-  if (paused) resumePractice(); else $('typing')?.focus();
-  updateMetrics();
+  finish();
 }
 function notePractice(words) {
   if (!notebook.length) return;
@@ -427,7 +416,7 @@ function announce(text) {
   clearTimeout(toastTimer); toastTimer = setTimeout(() => { toast.hidden = true; }, 2600);
 }
 function finishEarly() {
-  if (finished || !$('typing') || (mode === 'article' ? !input.length : !wordIndex && !input)) return;
+  if (finished || !$('typing')) return;
   finish(true);
 }
 function resumeEarly() {
@@ -522,6 +511,7 @@ globalThis.addEventListener?.('pagehide', saveProgress);
 globalThis.addEventListener?.('resize', () => { if (mode === 'article' && !finished) placeCaret(); });
 // Any printable key brings focus back to the typing card, unless another text field is in use.
 globalThis.document?.addEventListener?.('keydown', event => {
+  if ($('lesson-chooser') && !$('lesson-chooser').hidden) return;
   if (event.key === 'Escape' && currentView === 'practice' && !finished && $('typing')) { event.preventDefault(); finishEarly(); return; }
   if (finished && currentView === 'practice' && event.key === 'Enter' && resultKeys && !globalThis.document.activeElement?.matches?.('input,textarea,select,button,summary,a,[contenteditable]')) {
     event.preventDefault(); (event.shiftKey ? resultKeys.again : resultKeys.next)(); return;
@@ -565,6 +555,7 @@ function practiceNotebook(practiceMode) {
   const index = lessons.findIndex(item => item.notebook);
   if (index < 0 || !mayLeave()) return;
   saveProgress(); lessonSelect.value = String(index); updateSections(); pickerPage = 0; mode = practiceMode; loadPractice(false);
+  lessonPreview?.close();
   showView('practice'); currentView = 'practice'; globalThis.history?.replaceState?.(null, '', '#practice');
   $('typing')?.focus();
 }
@@ -589,7 +580,12 @@ function saveCustom(item, message) {
   const stored = persistLibrary();
   if (!stored) $(message).textContent = t('notice.storageFail');
   updateLessonOptions(); lessonSelect.value = String(lessons.length - 1); updateSections(); mode = 'article'; loadPractice();
+  const fullSentences = splitSentences(typeable(item.text));
+  if (!passageTranslations(fullSentences, fullSentences, item.translations?.[language.value], language.value)) {
+    void translationService.prefetch(fullSentences.map(sentence => sentence.trim()), language.value);
+  }
   showView('practice'); currentView = 'practice';
+  lessonPreview?.open(Number(lessonSelect.value), false);
   if ($('workspace-notice')) { $('workspace-notice').textContent = stored ? '' : t('notice.storageFail'); $('workspace-notice').hidden = stored; }
   if (globalThis.location && globalThis.history) globalThis.history.replaceState(null, '', '#practice');
   return true;
@@ -603,14 +599,14 @@ function renderVocabulary() {
   list.innerHTML = words.map(word => `<div><dt>${escapeHtml(word[0])}</dt><dd>${escapeHtml(word[languageIndex()] || '—')}</dd></div>`).join('');
   fillWordTranslations(item);
 }
-// Words added by hand get their translation later; a failed attempt is retried on the next visit.
+// Avoid duplicate requests while allowing a failed translation to be retried later.
 const wordAttempts = new Set();
 function fillWordTranslations(item) {
   const index = languageIndex();
-  for (const entry of (item.words || []).filter(word => !word[index]).slice(0, 12)) {
+  for (const entry of (item.words || []).filter(word => !word[index] && !wordAttempts.has(`${item.id}\u0000${language.value}\u0000${word[0]}`)).slice(0, 12)) {
     const key = `${item.id}\u0000${language.value}\u0000${entry[0]}`;
     if (wordAttempts.has(key)) continue;
-    wordAttempts.add(key); translateWord(item, entry[0], language.value);
+    wordAttempts.add(key); translateWord(item, entry[0], language.value).finally(() => wordAttempts.delete(key));
   }
 }
 function renderPicker() {
@@ -687,6 +683,12 @@ async function translateWord(item, word, selectedLanguage) {
     if (!translation) return;
     const entry = item.words.find(value => value[0] === word);
     if (entry) { entry[index] = translation; persistWords(item); if (lesson() === item) renderVocabulary(); }
+    if (entry && !item.notebook && notebook.some(note => note.word === word.toLowerCase())) {
+      notebook = notebook.map(note => note.word === word.toLowerCase() ? { ...note, translations:{ ...note.translations, [selectedLanguage]:translation } } : note);
+      if (!saveNotebook(globalThis.localStorage, notebook)) setHint('result.pickStorage');
+      syncNotebookLesson();
+      renderNotebook();
+    }
     if (retryEntry && retryWords?.includes(retryEntry)) { retryEntry[index] = translation; scheduleProgress(); }
     if (!finished && mode === 'word' && lesson() === item && currentWords()[wordIndex]?.[0] === word && language.value === selectedLanguage) exercise.querySelector('.translation').textContent = translation || t('word.noTranslation');
   } catch { /* Word practice remains available without a translation. */ }
@@ -886,6 +888,13 @@ if (lastIndex >= 0) {
 updateSections();
 if (lastIndex >= 0) { $('section-mode').value = lastPractice.section || 'all'; $('passage-mode').value = lastPractice.passage || 'full'; }
 loadPractice();
+if ($('lesson-chooser')) {
+  lessonPreview = setupLessonPreview({ select:$('preview-lesson'), start:$('preview-start'), back:$('preview-back'), preview:$('lesson-preview'), chooser:$('lesson-chooser'), practice:$('practice-content') }, () => lessons, index => {
+    if (index !== Number(lessonSelect.value)) { saveProgress(); lessonSelect.value = String(index); updateSections(); pickerPage = 0; mode = 'article'; loadPractice(); }
+  }, () => { if (!mayLeave()) return false; holdClock(); saveProgress(); return true; }, () => document.createElement('option'));
+  $('choose-lesson').addEventListener('click', () => lessonPreview.open(Number(lessonSelect.value)));
+  lessonPreview.open(Number(lessonSelect.value), false);
+}
 renderHistory();
 if (initialView === 'public') {
   const match = /^book-([0-9a-f]{32})$/.exec(initialHash);

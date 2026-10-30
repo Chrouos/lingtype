@@ -28,10 +28,19 @@
 
 <main id="main-content" tabindex="-1">
   <div id="view-practice" class="view">
+    <section id="lesson-chooser" class="lesson-chooser" hidden aria-labelledby="choose-heading">
+      <h1 id="choose-heading" data-i18n="choose.title">選擇練習文本</h1>
+      <label class="field"><span data-i18n="lesson">教材</span><select id="preview-lesson"></select></label>
+      <h2 data-i18n="choose.preview">文本預覽</h2>
+      <div id="lesson-preview" class="lesson-preview" tabindex="0"></div>
+      <div class="preview-actions"><button id="preview-start" class="btn primary" type="button" data-i18n="choose.start">開始練習</button><button id="preview-back" class="btn" type="button" data-i18n="choose.back">返回練習</button></div>
+    </section>
+    <div id="practice-content">
     <p id="workspace-notice" class="notice" role="status" hidden></p>
     <p id="session-toast" class="toast" role="status" hidden></p>
     <div class="practice-head">
       <h1 class="lesson-heading"><label class="sr-only" for="lesson" data-i18n="lesson">教材</label><select id="lesson"></select></h1>
+      <button id="choose-lesson" class="btn" type="button" data-i18n="choose.open">選擇文本</button>
       <div class="segmented" role="group" data-i18n-aria="mode.label" aria-label="練習模式">
         <button id="article-mode" type="button" class="mode active" data-i18n="mode.article">文章</button>
         <button id="word-mode" type="button" class="mode" data-i18n="mode.word">單字</button>
@@ -94,6 +103,7 @@
         </div>
       </div>
     </details>
+    </div>
   </div>
 
   <section id="view-import" class="view narrow" hidden aria-labelledby="import-title-heading">

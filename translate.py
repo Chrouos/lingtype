@@ -64,18 +64,29 @@ def translate_sentences(sentences, language, fallback=mymemory_translate):
         raise ValueError('單句超過 15000 字元，請先分段。')
     # When Google blocks requests, googletrans returns the English source unchanged; try the fallback then.
     global _google_paused_until
+    results = [''] * len(sentences)
     if time.monotonic() >= _google_paused_until:
         try:
-            results = google_translate(sentences, language)
-            if is_translated(results):
-                return results
+            google_results = google_translate(sentences, language)
+            if len(google_results) == len(sentences):
+                results = [value if is_translated([value]) else '' for value in google_results]
+                if all(results):
+                    return results
         except Exception:
             pass
-        _google_paused_until = time.monotonic() + GOOGLE_PAUSE_SECONDS
+        if not any(results):
+            _google_paused_until = time.monotonic() + GOOGLE_PAUSE_SECONDS
+    missing = [i for i, value in enumerate(results) if not value]
     try:
-        results = fallback(sentences, language)
+        translated = fallback([sentences[i] for i in missing], language)
+        if len(translated) != len(missing):
+            raise RuntimeError('翻譯服務回傳的句子數不符。')
+        for i, value in zip(missing, translated):
+            if is_translated([value]):
+                results[i] = value
     except Exception as error:
-        raise RuntimeError('翻譯服務暫時無法使用，請檢查網路後重試。') from error
-    if len(results) != len(sentences) or not is_translated(results):
+        if not any(results):
+            raise RuntimeError('翻譯服務暫時無法使用，請檢查網路後重試。') from error
+    if not any(results):
         raise RuntimeError('翻譯服務沒有回傳譯文，請稍後重試。')
     return results

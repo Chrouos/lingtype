@@ -23,15 +23,16 @@ try {
   await page.goto(base, { settleMs:400 });
   await page.eval(() => { localStorage.clear(); });
   await page.goto(base, { settleMs:600 });
+  assert.equal(await page.eval(`document.getElementById('lesson-chooser').hidden`), false);
+  await page.eval(`document.getElementById('preview-start').click()`);
   assert.equal(await page.eval('document.documentElement.lang'), 'zh-Hant');
   assert.equal(await text('nav-import'), '匯入');
   assert.equal(await page.eval(`getComputedStyle(document.body).fontFamily.includes('Geist')`), true);
 
-  // The whole article is shown; only the current sentence's translation appears.
-  // The whole text reads like a book: English then its translation, the current sentence's translation in full ink.
-  assert.match(await page.eval(`document.querySelector('#article-text .s.up')?.textContent || ''`), /^A gentle breeze/);
+  // Only the current sentence and its translation appear.
+  assert.equal(await page.eval(`document.querySelector('#article-text .s.up')`), null);
   assert.match(await page.eval(`document.querySelector('#article-text .tr .now').textContent`), /^城市仍然安靜時/);
-  assert.match(await page.eval(`document.querySelector('#article-text .tr').textContent`), /微風帶來雨的氣息/);
+  assert.doesNotMatch(await page.eval(`document.querySelector('#article-text .tr').textContent`), /微風帶來雨的氣息/);
   await shot('desktop-article-start');
   // Away from the text it dims with a prompt; typing fades everything around it.
   const look = () => page.eval(`({ veil:getComputedStyle(document.querySelector('.focus-veil')).opacity, bar:getComputedStyle(document.querySelector('.bar')).opacity, head:getComputedStyle(document.querySelector('.workspace-head')).opacity, text:getComputedStyle(document.getElementById('article-text')).opacity })`);
@@ -59,27 +60,26 @@ try {
   await type(' ');
   assert.match(await text('article-text'), /微風帶來雨的氣息/);
   assert.equal(await text('progress'), '第 2 / 2 句');
-  assert.match(await page.eval(`document.querySelector('#article-text .done-sentence').textContent`), /^The city was still quiet/);
+  assert.equal(await page.eval(`document.querySelector('#article-text .done-sentence')`), null);
   assert.match(await page.eval(`document.querySelector('#article-text .current-sentence').textContent`), /^A gentle breeze/);
   assert.match(await page.eval(`document.querySelector('#article-text .tr .now').textContent`), /^微風帶來雨的氣息/);
   await shot('desktop-article-second');
   await type('A gentle breeze carried the scent of rain, and for a moment she simply watched the morning unfold.');
   await pause(300);
-  // Finishing a text goes straight on to the next one: no result screen, the cursor is ready.
-  assert.equal(await page.eval(`document.getElementById('result').hidden`), true);
+  // Finishing the article shows its result before explicitly moving on.
+  assert.equal(await page.eval(`document.getElementById('result').hidden`), false);
+  assert.match(await text('result'), /完成/);
+  await page.eval(`document.getElementById('next-action').click()`);
   assert.equal(await page.eval(`document.getElementById('lesson').selectedOptions[0].textContent`), 'A small garden');
-  assert.equal(await text('session-toast'), '接著：A small garden');
   assert.equal(await page.eval(`document.activeElement.id`), 'typing');
-  await shot('desktop-session-next');
   await type('Every weekend, Noah');
 
-  // Esc stops the session: its totals cover both texts.
+  // Esc stops the current article and opens its result.
   await page.send('Input.dispatchKeyEvent', { type:'keyDown', key:'Escape', code:'Escape', windowsVirtualKeyCode:27 });
   await page.send('Input.dispatchKeyEvent', { type:'keyUp', key:'Escape', code:'Escape', windowsVirtualKeyCode:27 });
   await pause(900);
   assert.equal(await page.eval(`document.getElementById('result').hidden`), false);
   assert.match(await text('result'), /已停止/);
-  assert.match(await text('result'), /連續練習了 2 篇/);
   assert.match(await text('result'), /100%/);
   const wpm = Number(await page.eval(`document.querySelector('#result .stats strong').textContent`));
   assert.ok(wpm > 0, 'result WPM is positive');
@@ -119,7 +119,6 @@ try {
   assert.match(await text('history-list'), /文章/);
   await page.eval(`document.getElementById('nav-practice').click()`);
   assert.match(await text('result'), /中断しました/);
-  assert.match(await text('result'), /2 本を続けて練習/);
   await shot('desktop-result-ja');
   await setLanguage('ko');
   assert.equal(await text('nav-import'), '가져오기');
@@ -200,6 +199,8 @@ try {
   await page.eval(`(() => { document.getElementById('import-title').value = 'Harbour notes'; document.getElementById('import-text').value = 'Boats returned before dusk. The harbour lights flickered across the water.'; document.getElementById('import-form').requestSubmit(); })()`);
   await pause(300);
   assert.equal(await page.eval(`document.getElementById('view-practice').hidden`), false);
+  assert.match(await text('lesson-preview'), /Boats returned before dusk/);
+  await page.eval(`document.getElementById('preview-start').click()`);
   assert.equal(await page.eval(`document.getElementById('lesson').selectedOptions[0].textContent`), 'Harbour notes');
   assert.equal(await page.eval(`document.getElementById('word-picker').hidden`), false);
   assert.equal(await page.eval(`document.getElementById('lesson-vocab').hidden`), true);
@@ -215,11 +216,13 @@ try {
   console.log(shown ? `translation: ${shown}` : 'translation service unavailable; fallback shown');
   await shot('desktop-imported-zh');
 
-  // A long text is shown whole, in paragraphs, and the page follows the caret.
+  // A long text advances one sentence at a time and the page follows the caret.
   await page.eval(`(() => { document.getElementById('nav-import').click(); document.getElementById('import-title').value = 'Long text'; document.getElementById('import-text').value = Array.from({length:30}, (_, i) => 'Sentence number ' + (i + 1) + ' is here.').join(' '); document.getElementById('import-form').requestSubmit(); })()`);
   await pause(300);
-  assert.match(await text('article-text'), /Sentence number 30 is here\./);
-  assert.equal(await page.eval(`document.querySelectorAll('#article-text .para').length`), 4);
+  await page.eval(`document.getElementById('preview-start').click()`);
+  assert.match(await text('article-text'), /Sentence number 1 is here\./);
+  assert.doesNotMatch(await text('article-text'), /Sentence number 30 is here\./);
+  assert.equal(await page.eval(`document.querySelectorAll('#article-text .para').length`), 1);
   await click('#article-text');
   for (let i = 1; i <= 20; i++) await type(`Sentence number ${i} is here. `);
   await pause(700);
@@ -244,7 +247,6 @@ try {
   assert.equal(await text('progress'), '第 22 / 30 句');
   // Skipping the space marks it as one mistake, and the next sentence still lines up.
   await type('Sentence number 22 is here.Sentence');
-  assert.equal(await page.eval(`!!document.querySelector('#article-text .sep.incorrect')`), true);
   assert.equal(await page.eval(`document.querySelectorAll('#article-text .current-sentence .incorrect').length`), 0);
   assert.equal(await page.eval(`document.getElementById('typing').value.split('\u0000').length - 1`), 1, 'one missed space is recorded');
   await shot('desktop-article-missed-space');
@@ -256,6 +258,7 @@ try {
     const { nodeId } = await page.send('DOM.querySelector', { nodeId:root.nodeId, selector:'#document-file' });
     await page.send('DOM.setFileInputFiles', { nodeId, files:[resolve(path)] });
     for (let i = 0; i < 40 && await page.eval(`document.getElementById('view-practice').hidden`); i++) await pause(250);
+    await page.eval(`document.getElementById('preview-start').click()`);
   };
   await page.eval(`(() => { window.confirm = () => true; document.getElementById('nav-import').click(); })()`);
   await shot('desktop-import-page');
@@ -273,12 +276,14 @@ try {
   writeFileSync(`${out}/clip.srt`, '1\n00:00:01,000 --> 00:00:03,000\nThe tide came in slowly.\n\n2\n00:00:03,000 --> 00:00:05,000\nNobody noticed at first.\n');
   await upload(`${out}/clip.srt`);
   assert.equal(await page.eval(`document.getElementById('lesson').selectedOptions[0].textContent`), 'clip');
-  assert.match(await text('article-text'), /The tide came in slowly\. Nobody noticed at first\./);
+  assert.match(await text('article-text'), /The tide came in slowly\./);
+  assert.doesNotMatch(await text('article-text'), /Nobody noticed at first\./);
 
   // A YouTube link brings its English subtitles, titled after the video, with a link back to it.
   if (process.env.LINGTYPE_SKIP_NETWORK !== '1') {
     await page.eval(`(() => { document.getElementById('nav-import').click(); document.getElementById('arxiv-url').value = 'https://www.youtube.com/watch?v=arj7oStGLkU'; document.getElementById('arxiv-form').requestSubmit(); })()`);
     for (let i = 0; i < 120 && await page.eval(`document.getElementById('view-practice').hidden`); i++) await pause(250);
+    await page.eval(`document.getElementById('preview-start').click()`);
     const title = await page.eval(`document.getElementById('lesson').selectedOptions[0].textContent`);
     assert.match(title, /Procrastinator/, `YouTube import: ${await text('arxiv-message')}`);
     assert.match(await text('article-text'), /^So in college, I was a government major/);

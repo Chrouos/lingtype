@@ -25,17 +25,22 @@ test('article input blocks paste and drop while allowing typing and deletion', a
   elements.get('language').value = 'zh';
   elements.get('passage-mode').value = 'full';
   const saved = {};
-  globalThis.localStorage = { setItem(key, value) { saved[key] = value; }, getItem(key) { return saved[key] ?? null; } };
+  let failNotebookSave = false;
+  globalThis.localStorage = { setItem(key, value) { if (failNotebookSave && key === 'lingtype-notebook') throw new Error('storage full'); saved[key] = value; }, getItem(key) { return saved[key] ?? null; } };
   globalThis.document = { getElementById: id => elements.get(id), createElement: () => new Element(), createTextNode: text => text };
   await import('../site/app.mjs');
   elements.get('article-mode').dispatchEvent(new Event('click'));
+  elements.get('finish-now').click();
+  assert.equal(elements.get('result').hidden, false, 'an article can be stopped before typing');
+  assert.match(elements.get('result').innerHTML, /data-pick="city"/);
+  assert.equal(saved['lingtype-practice-history'], undefined, 'an empty attempt does not create a result');
+  elements.get('restart').click();
   const typing = elements.get('typing');
   assert.match(elements.get('exercise').innerHTML, /class="typing-stage/);
   assert.match(elements.get('exercise').innerHTML, /class="typing-overlay/);
-  // Every paragraph shows its translation; the current sentence's translation is highlighted.
+  // Only the current sentence and its translation are shown.
   assert.match(elements.get('article-text').innerHTML, /class="now">城市仍然安靜時/);
-  assert.match(elements.get('article-text').innerHTML, /微風帶來雨的氣息/);
-  assert.doesNotMatch(elements.get('article-text').innerHTML, /class="now">微風/);
+  assert.doesNotMatch(elements.get('article-text').innerHTML, /微風帶來雨的氣息/);
   typing.value = 'The city was still quiet when Mia opened her window.';
   typing.dispatchEvent(new Event('input'));
   assert.equal(typing.value, 'The city was still quiet when Mia opened her window.');
@@ -43,7 +48,7 @@ test('article input blocks paste and drop while allowing typing and deletion', a
   typing.value += ' ';
   typing.dispatchEvent(new Event('input'));
   assert.match(elements.get('article-text').innerHTML, /class="now">微風帶來雨的氣息/);
-  assert.match(elements.get('article-text').innerHTML, /class="s done-sentence">The city/);
+  assert.doesNotMatch(elements.get('article-text').innerHTML, /The city/);
   assert.match(typing.value, /window\. $/);
   typing.value = ''; typing.dispatchEvent(new Event('input'));
   for (const type of ['paste', 'drop']) {
@@ -83,6 +88,11 @@ test('article input blocks paste and drop while allowing typing and deletion', a
   assert.match(elements.get('article-text').innerHTML.replace(/<[^>]+>/g, ''), /First sentence/);
   assert.match(elements.get('article-text').innerHTML, /翻譯 First sentence/);
   assert.equal(elements.get('article-translation').hidden, true);
+  elements.get('typing').value = 'First sentence. Second sentence.';
+  elements.get('typing').dispatchEvent(new Event('input'));
+  assert.equal(elements.get('result').hidden, false, 'the completed article opens its result');
+  assert.match(elements.get('result').innerHTML, /First/);
+  assert.equal(JSON.parse(saved['lingtype-practice-history'])[0].partial, undefined);
   elements.get('restart').dispatchEvent(new Event('click'));
   await new Promise(resolve => setTimeout(resolve, 0));
   assert.equal(translateCalls, 1);
@@ -93,6 +103,11 @@ test('article input blocks paste and drop while allowing typing and deletion', a
   await new Promise(resolve => setTimeout(resolve, 0));
   assert.equal(elements.get('word-mode').disabled, false);
   assert.equal(JSON.parse(saved['lingtype-custom-lessons'])[0].words[0][0], 'sentence');
+  assert.equal(JSON.parse(saved['lingtype-notebook']).find(entry => entry.word === 'sentence').translations.zh, '翻譯 sentence');
+  failNotebookSave = true;
+  candidates.value = 'first'; candidates.checked = true; candidates.dispatchEvent(new Event('change'));
+  assert.match(elements.get('hint').textContent, /無法儲存/);
+  failNotebookSave = false;
   elements.get('picker-start').dispatchEvent(new Event('click'));
   assert.match(elements.get('exercise').innerHTML, /sentence/);
   assert.match(elements.get('exercise').innerHTML, /class="typing-stage/);

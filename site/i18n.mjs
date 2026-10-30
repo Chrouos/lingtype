@@ -5,6 +5,7 @@ export const dateLocale = { zh:'zh-TW', ja:'ja-JP', ko:'ko-KR' };
 
 export const messages = {
   zh: {
+    'choose.title':'選擇練習文本', 'choose.preview':'文本預覽', 'choose.start':'開始練習', 'choose.back':'返回練習', 'choose.open':'選擇文本',
     'skip':'跳到主要內容', 'language':'語言', 'nav.label':'主要功能',
     'nav.practice':'練習', 'nav.import':'匯入', 'nav.public':'公開', 'nav.history':'紀錄', 'nav.notebook':'單字本', 'notebook.title':'單字本', 'notebook.lesson':'我的單字本', 'notebook.empty':'單字本還是空的', 'notebook.emptyNote':'練習結束時點文章裡的單字，或在挑選單字時勾選，就會連同例句收進這裡。', 'notebook.practiceWords':'練習單字', 'notebook.practiceSentences':'練習例句', 'notebook.stats':'練習 {p} 次 · 打錯 {m} 次', 'notebook.from':'出自 {title}', 'notebook.remove':'從單字本移除 {word}',
     'mode.label':'練習模式', 'mode.article':'文章', 'mode.word':'單字', 'lesson':'教材',
@@ -49,6 +50,7 @@ export const messages = {
     'result.pickStorage':'無法儲存，單字只保留到本次。', 'source.link':'原文', 'source.license':'請參考原文授權',
   },
   ja: {
+    'choose.title':'練習テキストを選ぶ', 'choose.preview':'テキストのプレビュー', 'choose.start':'練習を始める', 'choose.back':'練習に戻る', 'choose.open':'テキストを選ぶ',
     'skip':'メインコンテンツへ移動', 'language':'言語', 'nav.label':'メインメニュー',
     'nav.practice':'練習', 'nav.import':'追加', 'nav.public':'公開', 'nav.history':'記録', 'nav.notebook':'単語帳', 'notebook.title':'単語帳', 'notebook.lesson':'マイ単語帳', 'notebook.empty':'単語帳はまだ空です', 'notebook.emptyNote':'練習後に本文の単語をクリックするか、単語選びでチェックすると、例文と一緒にここへ入ります。', 'notebook.practiceWords':'単語を練習', 'notebook.practiceSentences':'例文を練習', 'notebook.stats':'練習 {p} 回 · ミス {m} 回', 'notebook.from':'出典：{title}', 'notebook.remove':'{word} を単語帳から外す',
     'mode.label':'練習モード', 'mode.article':'文章', 'mode.word':'単語', 'lesson':'教材',
@@ -93,6 +95,7 @@ export const messages = {
     'result.pickStorage':'保存できないため、単語は今回のみ有効です。', 'source.link':'原文', 'source.license':'原文のライセンスを参照',
   },
   ko: {
+    'choose.title':'연습할 글 선택', 'choose.preview':'글 미리보기', 'choose.start':'연습 시작', 'choose.back':'연습으로 돌아가기', 'choose.open':'글 선택',
     'skip':'본문으로 건너뛰기', 'language':'언어', 'nav.label':'주요 메뉴',
     'nav.practice':'연습', 'nav.import':'가져오기', 'nav.public':'공개', 'nav.history':'기록', 'nav.notebook':'단어장', 'notebook.title':'단어장', 'notebook.lesson':'내 단어장', 'notebook.empty':'단어장이 아직 비어 있습니다', 'notebook.emptyNote':'연습을 마친 뒤 본문의 단어를 클릭하거나 단어 고르기에서 체크하면 예문과 함께 여기에 담깁니다.', 'notebook.practiceWords':'단어 연습', 'notebook.practiceSentences':'예문 연습', 'notebook.stats':'연습 {p}회 · 오류 {m}회', 'notebook.from':'출처: {title}', 'notebook.remove':'{word}을(를) 단어장에서 빼기',
     'mode.label':'연습 모드', 'mode.article':'문장', 'mode.word':'단어', 'lesson':'교재',

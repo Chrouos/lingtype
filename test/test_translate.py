@@ -33,6 +33,15 @@ class TranslateTests(unittest.TestCase):
         with fake_googletrans(lambda sentence: sentence):
             self.assertEqual(translate_sentences(['Library.'], 'zh', fallback=lambda s, l: ['圖書館。']), ['圖書館。'])
 
+    def test_partial_google_response_retries_only_missing_sentences(self):
+        calls = []
+        def fallback(sentences, language):
+            calls.append(sentences)
+            return ['世界。']
+        with fake_googletrans(lambda sentence: '你好。' if sentence == 'Hello.' else sentence):
+            self.assertEqual(translate_sentences(['Hello.', 'World.'], 'zh', fallback=fallback), ['你好。', '世界。'])
+        self.assertEqual(calls, [['World.']])
+
     def test_echo_with_failing_fallback_is_reported_as_a_failure(self):
         def broken(sentences, language): raise OSError('offline')
         with fake_googletrans(lambda sentence: sentence):

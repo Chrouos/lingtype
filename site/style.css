@@ -305,3 +305,9 @@ body:has(#typing:focus) :is(.bar,.practice-head,.scope,.workspace-head,.panel,.n
   .picker-body input[type=search]{max-width:none}
   .history th:nth-child(2),.history td:nth-child(2),.history th:nth-child(6),.history td:nth-child(6){display:none}
 }
+.lesson-chooser { max-width: 880px; margin: 0 auto; }
+.lesson-chooser h1 { margin: 0 0 1.25rem; }
+.lesson-chooser h2 { margin: 1.5rem 0 .75rem; font-size: 1rem; }
+.lesson-chooser select { width: 100%; padding: .7rem; font: inherit; color: inherit; background: transparent; border: 1px solid var(--border, #d7d9dc); border-radius: 6px; }
+.lesson-preview { max-height: 48vh; overflow: auto; white-space: pre-wrap; line-height: 1.65; padding: 1.25rem; border: 1px solid var(--border, #d7d9dc); border-radius: 8px; }
+.preview-actions { display: flex; gap: .75rem; margin-top: 1rem; flex-wrap: wrap; }
