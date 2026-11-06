@@ -59,6 +59,7 @@ h1{font-size:var(--fs-title);font-weight:600;letter-spacing:-.015em;line-height:
 .mode:disabled{opacity:.4;cursor:not-allowed}
 .scope{display:flex;flex-wrap:wrap;align-items:center;gap:8px;min-height:8px;margin:10px 0 0;color:var(--muted);font-size:13px}
 .scope:not(:has(> :not([hidden]))){margin:0}
+.scope-settings>summary{display:none}
 .source a{color:var(--text)}
 .notice{margin:0 0 16px;padding:12px 14px;border-radius:var(--radius-card);background:var(--hue-soft);color:var(--text);font-size:13px;overflow-wrap:anywhere}
 .notice a{color:var(--hue)}
@@ -105,11 +106,38 @@ h1{font-size:var(--fs-title);font-weight:600;letter-spacing:-.015em;line-height:
 .reader .sep.incorrect{background:var(--negative);opacity:.35}
 .para,.para .en,.para .tr{transition:color .3s}
 .translation,.article-translation{margin:20px 0 0;color:var(--muted);font-size:16px;line-height:1.7;white-space:normal}
+.formula{display:inline-block;padding:0 2px;color:var(--muted);font-size:.92em;vertical-align:middle}
+.formula.display{display:block;margin:6px 0;text-align:center;overflow-x:auto}
+.reader .correct .formula,.reader .done-sentence .formula{color:var(--text)}
+.figure-panel{margin:22px 0 0;border:1px solid var(--border);border-radius:var(--radius-card);background:var(--surface);max-width:880px}
+.figure-panel summary{cursor:pointer;padding:10px 14px;font-size:13px;font-weight:600;color:var(--muted)}
+.figure-body{padding:0 14px 14px}
+.figure-body img{display:block;width:100%;max-height:min(52vh,520px);object-fit:contain;background:#fff;border-radius:var(--radius-control);margin:0 0 10px}
+.figure-caption{margin:0;color:var(--muted);font-size:13px;line-height:1.6}
+.figure-strip{display:flex;gap:6px;overflow-x:auto;padding:0 0 12px;scrollbar-width:thin}
+.figure-chip{flex:none;display:inline-flex;align-items:center;gap:6px;height:44px;padding:0 10px 0 4px;border:1px solid var(--border);border-radius:var(--radius-control);background:var(--surface);color:var(--muted);font-size:12px;white-space:nowrap}
+.figure-chip:not(:has(img)){padding-left:10px}
+.figure-chip img{height:34px;width:52px;object-fit:contain;background:#fff;border-radius:4px}
+.figure-chip.current{border-color:var(--accent);color:var(--text);font-weight:600}
+.figure-content a{cursor:zoom-in}
+#figure-dialog{width:min(1200px,calc(100% - 32px));max-height:calc(100% - 32px);overflow:auto;border:1px solid var(--border);border-radius:var(--radius-card);background:var(--surface);color:var(--text);padding:16px 20px 20px}
+#figure-dialog::backdrop{background:rgb(0 0 0 / .6)}
+.figure-dialog-head{display:flex;align-items:center;gap:8px;margin:0 0 12px}
+.figure-dialog-head h2{margin:0 auto 0 0;font-size:16px}
+.figure-dialog-body img{display:block;width:100%;max-height:calc(100vh - 160px);object-fit:contain;background:#fff;border-radius:var(--radius-control);margin:0 0 12px}
+.figure-dialog-body .figure-table table{font-size:14px}
+.figure-body img.pdf-page{max-height:min(78vh,1100px);min-height:120px;border:1px solid var(--border)}
+.figure-body img.pdf-page:not([src]){display:none}
+.figure-caption strong{color:var(--text)}
+.figure-table{overflow-x:auto;margin:0 0 10px}
+.figure-table table{border-collapse:collapse;font-size:12.5px;font-variant-numeric:tabular-nums}
+.figure-table td{border-bottom:1px solid var(--rule);padding:4px 8px;white-space:nowrap}
+.figure-table tr:first-child td{font-weight:600}
 .error-note{min-height:20px;margin:12px 0 0;color:var(--negative);font-size:13px}
 
 /* Focus: typing fades everything around the text; away from it, the text dims and a prompt waits at the bottom. */
-.bar,.practice-head,.scope,.workspace-head,.panel,.notice{transition:opacity .25s}
-body:has(#typing:focus) :is(.bar,.practice-head,.scope,.workspace-head,.panel,.notice){opacity:.18}
+.bar,.practice-head,.scope-settings,.workspace-head,.panel,.notice{transition:opacity .25s}
+body:has(#typing:focus) :is(.bar,.practice-head,.scope-settings,.workspace-head,.panel,.notice){opacity:.18}
 .focus-veil{position:fixed;left:50%;bottom:28px;z-index:7;transform:translate(-50%,8px);pointer-events:none;opacity:0;transition:opacity .2s,transform .2s}
 .focus-veil span{display:block;padding:10px 18px;background:var(--accent);color:var(--on-accent);border-radius:var(--radius-control);box-shadow:0 8px 24px rgb(0 0 0/.18);font-size:14px;font-weight:500;white-space:nowrap}
 .typing-stage:not(:focus-within) .focus-veil{opacity:1;transform:translate(-50%,0)}
@@ -164,7 +192,8 @@ body:has(#typing:focus) :is(.bar,.practice-head,.scope,.workspace-head,.panel,.n
 .pick-chip:hover{border-color:var(--control)}
 .pick-chip.picked{background:var(--hue-soft);border-color:transparent;color:var(--hue)}
 .review-text{margin:12px 0 0;padding:16px 18px;max-height:260px;overflow:auto;background:var(--ground);border-radius:var(--radius-control);color:var(--text);font-size:16px;line-height:1.9;white-space:pre-wrap;user-select:text}
-.pick{display:inline-block;cursor:pointer;border-radius:4px;padding:0 2px;margin:0 -2px;transition:background .15s,color .15s,box-shadow .15s}
+.pick{display:inline-block;cursor:pointer;border:0;background:none;color:inherit;font:inherit;border-radius:4px;padding:0 2px;margin:0 -2px;transition:background .15s,color .15s,box-shadow .15s}
+.pick:focus-visible{outline:2px solid var(--hue);outline-offset:2px}
 .pick:hover{background:var(--raised)}
 .pick.picked{background:var(--hue-soft);color:var(--hue);box-shadow:inset 0 -2px 0 var(--hue)}
 .pop{animation:pop .35s cubic-bezier(.3,1.6,.5,1)}
@@ -244,9 +273,19 @@ body:has(#typing:focus) :is(.bar,.practice-head,.scope,.workspace-head,.panel,.n
 .note-word{display:grid;gap:2px}
 .note-word strong{font-size:18px;font-weight:600}
 .note-word span{color:var(--muted)}
+.note-word button{justify-self:start;margin-left:-8px}
+.translation-edit{margin:4px 0 0 -8px}
+#menu-restart{display:none}
+#translation-dialog{width:min(560px,calc(100% - 32px));max-height:calc(100% - 32px);overflow:auto;border:1px solid var(--border);border-radius:var(--radius-card);background:var(--surface);color:var(--text);padding:24px}
+#translation-dialog::backdrop{background:rgb(0 0 0 / .45)}
+#translation-dialog h2{margin:0 0 12px;font-size:20px}
+.translation-original{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.6;color:var(--muted)}
+#translation-input{width:100%;resize:vertical}
 .note-sentence{margin:0;font-size:16px;line-height:1.7}
 .note-sentence mark{background:var(--hue-soft);color:var(--hue);border-radius:3px;padding:0 2px}
 .note-meta{display:block;margin-top:4px;color:var(--muted);font-size:12px}
+.note-review{display:block;margin-top:4px;color:var(--muted);font-size:12px}
+.note-review[data-review-state="due"]{color:var(--hue);font-weight:600}
 .note-remove{font-size:18px;line-height:1}
 .notebook-list .notebook-empty{display:block;padding:48px 0;text-align:center;border:0}
 .notebook-empty strong{display:block;font-size:16px}
@@ -280,6 +319,10 @@ body:has(#typing:focus) :is(.bar,.practice-head,.scope,.workspace-head,.panel,.n
 
 /* Phone */
 @media (max-width:720px){
+  #restart{display:none}
+  #menu-restart{display:block}
+  .scope-settings:not(:has(.scope> :not([hidden]))){display:none}
+  .scope-settings>summary{display:list-item;cursor:pointer;color:var(--muted);font-size:13px;margin-top:10px}
   .bar-inner{height:auto;flex-wrap:wrap;gap:0 12px;padding:10px 16px 0}
   .nav{order:3;width:100%;margin:6px -12px 0;padding-bottom:6px;overflow-x:auto}
   main{padding:8px 16px 96px}

@@ -20,7 +20,7 @@ test('article input blocks paste and drop while allowing typing and deletion', a
     }
     get innerHTML() { return this.html; }
   }
-  for (const id of ['lesson', 'language', 'exercise', 'result', 'word-mode', 'article-mode', 'restart', 'pause', 'category', 'progress', 'hint', 'passage-label', 'passage-mode', 'section-label', 'section-mode', 'source-info', 'import-form', 'import-title', 'import-text', 'import-translation', 'import-message', 'arxiv-form', 'arxiv-submit', 'arxiv-message', 'arxiv-url', 'word-picker', 'word-search', 'word-candidates', 'selected-words', 'picker-start', 'live-time', 'live-wpm', 'live-accuracy', 'live-accuracy-label', 'live-progress', 'progress-bar', 'history-list', 'delete-lesson', 'nav-practice', 'nav-import', 'nav-history', 'view-practice', 'view-import', 'view-history', 'finish-now']) elements.set(id, new Element());
+  for (const id of ['lesson', 'language', 'exercise', 'result', 'word-mode', 'article-mode', 'restart', 'pause', 'category', 'progress', 'hint', 'passage-label', 'passage-mode', 'section-label', 'section-mode', 'source-info', 'import-form', 'import-title', 'import-text', 'import-translation', 'import-message', 'arxiv-form', 'arxiv-submit', 'arxiv-message', 'arxiv-url', 'word-picker', 'word-search', 'word-candidates', 'selected-words', 'picker-start', 'word-translation-retry', 'word-translation-status', 'live-time', 'live-wpm', 'live-accuracy', 'live-accuracy-label', 'live-progress', 'progress-bar', 'history-list', 'delete-lesson', 'nav-practice', 'nav-import', 'nav-history', 'view-practice', 'view-import', 'view-history', 'finish-now']) elements.set(id, new Element());
   elements.get('lesson').value = '0';
   elements.get('language').value = 'zh';
   elements.get('passage-mode').value = 'full';
@@ -60,6 +60,7 @@ test('article input blocks paste and drop while allowing typing and deletion', a
   typing.dispatchEvent(new Event('input'));
   assert.equal(typing.value, 'T');
   assert.equal(elements.get('live-accuracy').textContent, '100%');
+  assert.equal(elements.get('live-progress').textContent, '1%');
   elements.get('nav-import').click();
   assert.equal(typing.disabled, true);
   assert.equal(elements.get('view-import').hidden, false);
@@ -104,6 +105,18 @@ test('article input blocks paste and drop while allowing typing and deletion', a
   assert.equal(elements.get('word-mode').disabled, false);
   assert.equal(JSON.parse(saved['lingtype-custom-lessons'])[0].words[0][0], 'sentence');
   assert.equal(JSON.parse(saved['lingtype-notebook']).find(entry => entry.word === 'sentence').translations.zh, '翻譯 sentence');
+  const retryButton = elements.get('word-translation-retry'), wordStatus = elements.get('word-translation-status');
+  const workingFetch = globalThis.fetch;
+  globalThis.fetch = async () => { throw new Error('offline'); };
+  candidates.value = 'second'; candidates.checked = true; candidates.dispatchEvent(new Event('change'));
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.match(wordStatus.textContent, /翻譯.*無法/);
+  assert.equal(retryButton.hidden, false);
+  globalThis.fetch = workingFetch;
+  retryButton.click();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(JSON.parse(saved['lingtype-notebook']).find(entry => entry.word === 'second').translations.zh, '翻譯 second');
+  assert.equal(retryButton.hidden, true);
   failNotebookSave = true;
   candidates.value = 'first'; candidates.checked = true; candidates.dispatchEvent(new Event('change'));
   assert.match(elements.get('hint').textContent, /無法儲存/);
@@ -147,8 +160,14 @@ test('article input blocks paste and drop while allowing typing and deletion', a
   assert.equal(elements.get('lesson').value, '9');
   elements.get('pause').dispatchEvent(new Event('click'));
   assert.equal(paperInput.disabled, false);
+  globalThis.confirm = () => true;
+  elements.get('lesson').value = '0'; elements.get('lesson').dispatchEvent(new Event('change'));
+  elements.get('lesson').value = '9'; elements.get('lesson').dispatchEvent(new Event('change'));
+  assert.equal(elements.get('section-mode').value, '1');
+  assert.equal(elements.get('typing').value, 'Ax');
+  elements.get('pause').dispatchEvent(new Event('click'));
   // Finishing a text moves straight on, so the result screen comes from stopping with the finish button.
-  paperInput.value = 'Ax introduction'; paperInput.dispatchEvent(new Event('input'));
+  elements.get('typing').value = 'Ax introduction'; elements.get('typing').dispatchEvent(new Event('input'));
   elements.get('finish-now').click();
   assert.match(elements.get('result').innerHTML, /已停止/);
   assert.match(elements.get('result').innerHTML, /重練打錯過的字（1）/);
@@ -165,4 +184,27 @@ test('article input blocks paste and drop while allowing typing and deletion', a
   elements.get('delete-lesson').dispatchEvent(new Event('click'));
   assert.equal(elements.get('lesson').value, '0');
   assert.match(elements.get('exercise').innerHTML, /gentle/);
+
+  // A failed first batch must not prevent later sentence translations appearing in the reader.
+  let batches = 0;
+  globalThis.fetch = async (url, options) => {
+    const sentences = JSON.parse(options.body).sentences;
+    batches++;
+    return batches === 1 ? {ok:false, json:async () => ({error:'temporary'})} :
+      {ok:true, json:async () => ({translations:sentences.map(s => `譯文 ${s}`)})};
+  };
+  const parts = Array.from({length:9}, (_, i) => `Number ${i}.`);
+  for (const id of ['translation-progress','translation-progress-text','translation-retry']) elements.set(id, new Element());
+  elements.get('import-title').value = 'Batch recovery';
+  elements.get('import-text').value = parts.join(' ');
+  elements.get('import-form').dispatchEvent(new Event('submit', {cancelable:true}));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  elements.get('typing').value = parts.slice(0, 8).join(' ') + ' ';
+  elements.get('typing').dispatchEvent(new Event('input'));
+  assert.match(elements.get('article-text').innerHTML, /譯文 Number 8/);
+  elements.get('typing').value = '';
+  elements.get('typing').dispatchEvent(new Event('input'));
+  elements.get('translation-retry').onclick();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.match(elements.get('article-text').innerHTML, /譯文 Number 0/);
 });

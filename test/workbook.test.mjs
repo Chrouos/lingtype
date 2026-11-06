@@ -2,6 +2,25 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createWorkbook, readWorkbook, selectedArticleWords } from '../site/workbook.mjs';
 import { readBuiltinWords, saveBuiltinWords } from '../site/library.mjs';
+import { createTranslationCache } from '../site/translation-cache.mjs';
+
+test('an edited sentence translation is included in a shared workbook', () => {
+  const cache = {}, service = createTranslationCache(null, async () => [], cache);
+  service.set('First.', 'zh', '修正後的翻譯');
+  const file = createWorkbook({title:'Example',text:'First.',words:[],translations:{}}, cache);
+  assert.equal(readWorkbook(JSON.stringify(file)).sentenceTranslations.zh['First.'], '修正後的翻譯');
+  service.set('First.', 'zh', 'First.');
+  const same = createWorkbook({title:'Example',text:'First.',words:[],translations:{}}, cache);
+  assert.equal(readWorkbook(JSON.stringify(same)).sentenceTranslations.zh['First.'], 'First.');
+});
+
+test('workbook round trips sentence translations belonging to the lesson', () => {
+  const lesson = { title:'Example', text:'First. Second.', words:[], translations:{} };
+  const cache = { 'zh\u0000First.':'first translated', 'ja\u0000Second.':'second translated', 'zh\u0000Other.':'private' };
+  const file = createWorkbook(lesson, cache);
+  const restored = readWorkbook(JSON.stringify(file));
+  assert.deepEqual(restored.sentenceTranslations, { zh:{'First.':'first translated'}, ja:{'Second.':'second translated'} });
+});
 
 test('workbook preserves a lesson and chosen word translations without exposing local ids', () => {
   const lesson = { id:'private-id', title:'Practice', text:'A gentle breeze.', translations:{zh:'溫柔的微風。'}, words:[['gentle','溫和的','','']], sections:[{title:'One',text:'A gentle breeze.'}] };

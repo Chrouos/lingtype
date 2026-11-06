@@ -1,7 +1,18 @@
+import { cleanFigures, cleanFormulas } from './paper.mjs';
+
+// Figures and formulas are checked again on reading, since a restored backup may carry anything.
+function cleanPaper(item) {
+  for (const [key, clean] of [['figures', cleanFigures], ['formulas', cleanFormulas]]) {
+    if (item[key] === undefined) continue;
+    try { item[key] = clean(item[key]); } catch { delete item[key]; }
+  }
+  return item;
+}
+
 export function readCustomLessons(storage) {
   try {
     const saved = JSON.parse(storage?.getItem('lingtype-custom-lessons') || 'null');
-    if (Array.isArray(saved)) return saved.filter(item => item && typeof item.text === 'string' && item.text.trim());
+    if (Array.isArray(saved)) return saved.filter(item => item && typeof item.text === 'string' && item.text.trim()).map(cleanPaper);
     const legacy = JSON.parse(storage?.getItem('lingtype-custom-lesson') || 'null');
     return legacy && typeof legacy.text === 'string' && legacy.text.trim() ? [legacy] : [];
   } catch { return []; }

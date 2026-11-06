@@ -37,8 +37,23 @@ export function removeWord(entries, word) {
 
 export function recordPractice(entries, practiced, missed, now = Date.now()) {
   return entries.map(entry => practiced.has(entry.word) || missed.has(entry.word)
-    ? { ...entry, practiced:entry.practiced + (practiced.has(entry.word) ? 1 : 0), missed:entry.missed + (missed.has(entry.word) ? 1 : 0), last:now }
+    ? { ...entry, practiced:entry.practiced + (practiced.has(entry.word) ? 1 : 0), missed:entry.missed + (missed.has(entry.word) ? 1 : 0), last:now,
+      reviewIntervalDays:missed.has(entry.word) ? 1 : ([1, 3, 7, 14, 30].find(days => days > (entry.reviewIntervalDays || 0)) || 30),
+      reviewDue:now + (missed.has(entry.word) ? 1 : ([1, 3, 7, 14, 30].find(days => days > (entry.reviewIntervalDays || 0)) || 30)) * 86400000 }
     : entry);
+}
+
+export function dueWords(entries, now = Date.now()) {
+  return entries.filter(entry => !Number.isFinite(entry.reviewDue) || entry.reviewDue <= now);
+}
+
+export function nextReviewTime(entries, now = Date.now()) {
+  const future = entries.map(entry => entry.reviewDue).filter(value => Number.isFinite(value) && value > now);
+  return future.length ? Math.min(...future) : null;
+}
+
+export function updateWordTranslation(entries, word, language, text) {
+  return entries.map(entry => entry.word === word ? {...entry, translations:{...entry.translations, [language]:text}} : entry);
 }
 
 // Words missed most often, relative to how often they were practised, come first; then the oldest.

@@ -1,6 +1,33 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readNotebook, saveNotebook, sentenceWith, addWord, removeWord, recordPractice, practiceOrder, notebookLesson } from '../site/notebook.mjs';
+import { readNotebook, saveNotebook, sentenceWith, addWord, removeWord, recordPractice, practiceOrder, notebookLesson, dueWords, nextReviewTime, updateWordTranslation } from '../site/notebook.mjs';
+
+test('next review time identifies the earliest future review', () => {
+  const entries = [{reviewDue:5000}, {reviewDue:3000}, {reviewDue:1000}];
+  assert.equal(nextReviewTime(entries, 2000), 3000);
+  assert.equal(nextReviewTime(entries, 6000), null);
+});
+
+test('review schedule includes new and due words and advances or resets after practice', () => {
+  const day = 86400000;
+  let items = addWord([], {word:'harbour'}, 100);
+  assert.equal(dueWords(items, 100).length, 1);
+  items = recordPractice(items, new Set(['harbour']), new Set(), 100);
+  assert.equal(dueWords(items, 100 + day - 1).length, 0);
+  assert.equal(dueWords(items, 100 + day).length, 1);
+  items = recordPractice(items, new Set(['harbour']), new Set(), 100 + day);
+  assert.equal(items[0].reviewIntervalDays, 3);
+  items = recordPractice(items, new Set(['harbour']), new Set(['harbour']), 100 + 4 * day);
+  assert.equal(items[0].reviewIntervalDays, 1);
+});
+
+test('editing a word translation preserves other languages and review history', () => {
+  const items = addWord([], {word:'harbour',translations:{zh:'港口',ja:'港'}}, 1);
+  const changed = updateWordTranslation(items, 'harbour', 'zh', '海港');
+  assert.deepEqual(changed[0].translations, {zh:'海港',ja:'港'});
+  assert.equal(changed[0].added, 1);
+  assert.equal(items[0].translations.zh, '港口');
+});
 
 const text = 'Boats returned before dusk. The harbour lights flickered across the water. Harbours are busy places.';
 

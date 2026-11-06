@@ -1,7 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { articleWords, suggestWords, searchWords } from '../site/vocabulary.mjs';
+import { articleWords, suggestWords, searchWords, nextWordFocus } from '../site/vocabulary.mjs';
 import { readCustomLessons, addCustomLesson } from '../site/library.mjs';
+
+test('arrow keys move the single word focus without leaving the text', () => {
+  assert.equal(nextWordFocus(0, 3, 'ArrowRight'), 1);
+  assert.equal(nextWordFocus(2, 3, 'ArrowRight'), 2);
+  assert.equal(nextWordFocus(1, 3, 'Home'), 0);
+  assert.equal(nextWordFocus(1, 3, 'End'), 2);
+  assert.equal(nextWordFocus(1, 3, 'x'), null);
+});
 
 test('article words are unique case-insensitively and preserve contractions', () => {
   assert.deepEqual(articleWords("The garden, garden! Don't stop."), ['the', 'garden', "don't", 'stop']);

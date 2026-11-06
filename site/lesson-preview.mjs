@@ -1,7 +1,9 @@
+import { plainText } from './paper.mjs';
+
 export function setupLessonPreview({ select, start, back, preview, chooser, practice }, getLessons, onStart, canOpen, createOption) {
   function render() {
     const item = getLessons()[Number(select.value)];
-    preview.textContent = item?.text || '';
+    preview.textContent = plainText(item?.text || '', item?.formulas);
   }
   function open(index, cancellable = true) {
     if (cancellable && !canOpen()) return;

@@ -4,6 +4,9 @@ import os
 import re
 import sqlite3
 import sys
+import threading
+import time
+from collections import deque
 from pathlib import Path
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -16,6 +19,31 @@ from importers import extract_file, fetch_article, youtube_id, youtube_transcrip
 from public_library import PublicLibrary
 sys.path.insert(0, str(Path(__file__).resolve().parent / '.deps'))
 from translate import translate_sentences
+
+
+class RequestLimiter:
+    def __init__(self, limit=120, window=60):
+        self.limit, self.window = limit, window
+        self.clients = {}
+        self.lock = threading.Lock()
+
+    def allow(self, client, now=None):
+        now = time.monotonic() if now is None else now
+        with self.lock:
+            if len(self.clients) >= 10000:
+                self.clients = {key: times for key, times in self.clients.items() if times and now - times[-1] < self.window}
+                if len(self.clients) >= 10000 and client not in self.clients:
+                    return False
+            times = self.clients.setdefault(client, deque())
+            while times and now - times[0] >= self.window:
+                times.popleft()
+            if len(times) >= self.limit:
+                return False
+            times.append(now)
+            return True
+
+
+request_limiter = RequestLimiter()
 
 
 class ArxivRedirect(HTTPRedirectHandler):
@@ -38,6 +66,12 @@ def fetch_error_message(error):
 
 
 class Handler(SimpleHTTPRequestHandler):
+    def allowed_request(self):
+        if request_limiter.allow(self.client_address[0]):
+            return True
+        self.send_json({'error': '請求過於頻繁，請稍後再試。'}, 429)
+        return False
+
     def send_json(self, data, status=200):
         body = json.dumps(data, ensure_ascii=False).encode('utf-8')
         self.send_response(status)
@@ -56,14 +90,24 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         path = urlsplit(self.path).path
-        if path not in ('/api/translate', '/api/workbooks', '/api/extract'):
+        community = re.fullmatch(r'/api/workbooks/([0-9a-f]{32})/community/(like|comments|attempts)', path)
+        cover = re.fullmatch(r'/api/workbooks/([0-9a-f]{32})/cover', path)
+        if path not in ('/api/translate', '/api/workbooks', '/api/extract') and not community and not cover:
             self.send_error(404)
             return
         if not self.same_origin():
             self.send_error(403)
             return
+        if not self.allowed_request(): return
         try:
             length = int(self.headers.get('Content-Length', '0'))
+            if cover:
+                # A cover arrives as the raw image; only the owner of the workbook may set it.
+                if not 0 < length <= 2_000_000:
+                    raise ValueError('封面必須小於 2 MB。')
+                saved = self.server.library.set_cover(cover.group(1), self.headers.get('X-Owner-Key', ''), self.rfile.read(length))
+                self.send_json({'saved':True} if saved else {'error':'找不到練習冊或沒有修改權限。'}, 200 if saved else 404)
+                return
             if path == '/api/extract':
                 # An uploaded document arrives as raw bytes, its file name in the query string.
                 if not 0 < length <= 20_000_000:
@@ -74,6 +118,14 @@ class Handler(SimpleHTTPRequestHandler):
             if not 0 < length <= 2_000_000:
                 raise ValueError('翻譯內容過大或空白。')
             payload = json.loads(self.rfile.read(length))
+            if community:
+                identifier, action = community.groups()
+                if action == 'like': self.send_json({'likes':self.server.library.set_like(identifier, payload.get('visitor'), payload.get('liked'))})
+                elif action == 'comments': self.send_json({'id':self.server.library.add_comment(identifier, payload.get('author', ''), payload.get('text'))}, 201)
+                else:
+                    self.server.library.record_attempt(identifier, payload.get('author', ''), payload.get('wpm'), payload.get('accuracy'))
+                    self.send_json({'saved':True}, 201)
+                return
             if path == '/api/workbooks':
                 identifier, owner_key = self.server.library.publish(payload)
                 self.send_json({'id':identifier, 'ownerKey':owner_key}, 201)
@@ -91,6 +143,12 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_json(result, status)
 
     def do_DELETE(self):
+        comment = re.fullmatch(r'/api/workbooks/([0-9a-f]{32})/community/comments/([0-9a-f]{32})', urlsplit(self.path).path)
+        if comment:
+            if not self.same_origin(): return self.send_error(403)
+            if not self.allowed_request(): return
+            removed = self.server.library.remove_comment(*comment.groups(), self.headers.get('X-Owner-Key', ''))
+            return self.send_json({'removed':True} if removed else {'error':'找不到留言或沒有刪除權限。'}, 200 if removed else 404)
         match = re.fullmatch(r'/api/workbooks/([0-9a-f]{32})', urlsplit(self.path).path)
         if not match:
             self.send_error(404)
@@ -98,6 +156,7 @@ class Handler(SimpleHTTPRequestHandler):
         if not self.same_origin():
             self.send_error(403)
             return
+        if not self.allowed_request(): return
         try:
             removed = self.server.library.unpublish(match.group(1), self.headers.get('X-Owner-Key', ''))
             self.send_json({'removed':True} if removed else {'error':'找不到練習冊或沒有刪除權限。'}, 200 if removed else 404)
@@ -106,6 +165,27 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         request = urlsplit(self.path)
+        if request.path.startswith('/api/') and not self.allowed_request(): return
+        cover = re.fullmatch(r'/api/workbooks/([0-9a-f]{32})/cover', request.path)
+        if cover:
+            try: found = self.server.library.get_cover(cover.group(1))
+            except sqlite3.Error: return self.send_json({'error':'無法讀取封面。'}, 500)
+            if not found: return self.send_json({'error':'這本練習冊沒有封面。'}, 404)
+            mime, data = found
+            self.send_response(200)
+            self.send_header('Content-Type', mime)
+            self.send_header('Content-Length', str(len(data)))
+            self.send_header('X-Content-Type-Options', 'nosniff')
+            self.send_header('Cache-Control', 'no-cache')
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        community = re.fullmatch(r'/api/workbooks/([0-9a-f]{32})/community', request.path)
+        if community:
+            try: self.send_json(self.server.library.community(community.group(1), parse_qs(request.query).get('visitor', [''])[0]))
+            except ValueError as error: self.send_json({'error':str(error)}, 404)
+            except sqlite3.Error: self.send_json({'error':'無法讀取社群資料。'}, 500)
+            return
         if request.path == '/api/workbooks':
             try: self.send_json({'books':self.server.library.list_books()})
             except sqlite3.Error: self.send_json({'error':'無法讀取公開練習冊。'}, 500)

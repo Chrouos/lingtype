@@ -19,20 +19,6 @@ export function splitSentences(text) {
   return result;
 }
 
-export function articleWindow(sentences, cursor) {
-  const total = sentences.reduce((sum, sentence) => sum + sentence.length, 0);
-  const start = Math.max(0, Math.min(cursor - 300, total - 1000));
-  const end = Math.min(total, start + 1000);
-  const parts = [];
-  let offset = 0;
-  sentences.forEach((sentence, index) => {
-    const from = Math.max(start, offset), to = Math.min(end, offset + sentence.length);
-    if (to > from) parts.push({ index, start:from, end:to, text:sentence.slice(from - offset, to - offset) });
-    offset += sentence.length;
-  });
-  return parts;
-}
-
 export function selectPassage(text, mode, random = Math.random) {
   if (mode === 'full') return text;
   const paragraphs = text.split(/\n\s*\n/).map(s => s.trim()).filter(Boolean);

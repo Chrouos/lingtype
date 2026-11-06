@@ -56,3 +56,4 @@
 9. 掃描成圖片的 PDF 需要 OCR 才能匯入。
 10. 測試：`test/browser-e2e.mjs` 依賴 `.agents/` 內設計技能的 CDP 小工具（已列入 .gitignore，靠 `skills-lock.json` 重新安裝）；考慮改成專案自己的瀏覽器測試工具。
 11. 在真的手機鍵盤上試打一次（輸入框跟著游標的做法目前只在模擬的 390px 寬度測過）。
+12. 論文閱讀模式（arXiv 圖表、`/pdf/` 網址、PDF 頁面截圖）：計畫見 `2026-11-06-paper-reader-figures.md`。

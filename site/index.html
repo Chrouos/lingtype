@@ -27,6 +27,7 @@
 </header>
 
 <main id="main-content" tabindex="-1">
+  <p id="lock-warning" class="notice" role="status" hidden></p>
   <div id="view-practice" class="view">
     <section id="lesson-chooser" class="lesson-chooser" hidden aria-labelledby="choose-heading">
       <h1 id="choose-heading" data-i18n="choose.title">選擇練習文本</h1>
@@ -37,6 +38,7 @@
     </section>
     <div id="practice-content">
     <p id="workspace-notice" class="notice" role="status" hidden></p>
+    <p id="translation-progress" class="notice" role="status" hidden><span id="translation-progress-text"></span> <button id="translation-retry" type="button" data-i18n="translation.retry" hidden>重試翻譯</button></p>
     <p id="session-toast" class="toast" role="status" hidden></p>
     <div class="practice-head">
       <h1 class="lesson-heading"><label class="sr-only" for="lesson" data-i18n="lesson">教材</label><select id="lesson"></select></h1>
@@ -46,12 +48,15 @@
         <button id="word-mode" type="button" class="mode" data-i18n="mode.word">單字</button>
       </div>
     </div>
+    <details id="scope-settings" class="scope-settings" open>
+      <summary data-i18n="scope.settings">範圍與來源</summary>
     <div class="scope">
       <span id="category" hidden></span>
       <label id="section-label" class="chip-select" hidden><span class="sr-only" data-i18n="section">章節</span><select id="section-mode"><option value="all" data-i18n="section.all">全部章節</option></select></label>
       <label id="passage-label" class="chip-select" hidden><span class="sr-only" data-i18n="passage">範圍</span><select id="passage-mode"><option value="full" data-i18n="passage.full">全文</option><option value="random" data-i18n="passage.random">隨機段落</option></select></label>
       <span id="source-info" class="source" hidden></span>
     </div>
+    </details>
 
     <section class="workspace" data-i18n-aria="nav.practice" aria-label="練習">
       <div class="workspace-head">
@@ -70,6 +75,7 @@
               <div class="menu-list">
                 <button id="export-workbook" type="button" data-i18n="action.export">匯出練習冊</button>
                 <button id="publish-workbook" type="button" data-i18n="action.publish">公開分享</button>
+                <button id="menu-restart" type="button" data-i18n="action.restart">重新開始</button>
                 <button id="delete-lesson" type="button" class="danger" hidden data-i18n="action.delete">刪除教材</button>
               </div>
             </details>
@@ -84,6 +90,8 @@
     <section class="panel vocab" id="lesson-vocab" hidden aria-labelledby="vocab-heading">
       <h2 id="vocab-heading"><span data-i18n="vocab.title">本課單字</span><span class="count" id="vocab-count"></span></h2>
       <dl id="vocab-list" class="vocab-list"></dl>
+      <p id="word-translation-status" role="status"></p>
+      <button class="btn-quiet" id="word-translation-retry" type="button" hidden data-i18n="picker.retryTranslation">重試單字翻譯</button>
     </section>
 
     <details class="panel word-picker" id="word-picker" hidden>
@@ -134,10 +142,14 @@
     <div class="notebook-head">
       <h1 id="notebook-heading"><span data-i18n="notebook.title">單字本</span><span class="count" id="notebook-count"></span></h1>
       <div class="actions">
+        <button class="btn primary" id="notebook-due" type="button" data-i18n="notebook.reviewDue">練習待複習</button>
         <button class="btn primary" id="notebook-words" type="button" data-i18n="notebook.practiceWords">練習單字</button>
         <button class="btn" id="notebook-sentences" type="button" data-i18n="notebook.practiceSentences">練習例句</button>
       </div>
     </div>
+    <p id="notebook-review-note" class="muted small" aria-live="polite"></p>
+    <p id="notebook-message" class="message" role="status"></p>
+    <button id="notebook-undo" class="btn-quiet" type="button" hidden data-i18n="notebook.undo">復原移除</button>
     <ul id="notebook-list" class="notebook-list"></ul>
   </section>
 
@@ -164,8 +176,31 @@
         <tbody id="history-list"></tbody>
       </table>
     </div>
+    <section class="panel" aria-labelledby="backup-heading">
+      <h2 id="backup-heading" data-i18n="backup.title">資料備份</h2>
+      <p class="muted small" data-i18n="backup.note">備份包含教材、翻譯、單字本、紀錄及公開教材的下架碼，請妥善保存。</p>
+      <div class="actions">
+        <button id="backup-export" class="btn" type="button" data-i18n="backup.export">匯出所有資料</button>
+        <label class="btn" for="backup-file" data-i18n="backup.import">還原備份</label>
+        <input id="backup-file" type="file" accept=".json,application/json" class="sr-only">
+      </div>
+      <p id="backup-message" class="message" role="status"></p>
+    </section>
   </section>
 </main>
+<dialog id="figure-dialog" aria-labelledby="figure-dialog-title">
+  <div class="figure-dialog-head"><h2 id="figure-dialog-title"></h2><a id="figure-original" class="btn-quiet" target="_blank" rel="noopener noreferrer" data-i18n="figure.original">開啟原圖</a><button id="figure-close" class="btn" type="button" autofocus data-i18n="figure.close">關閉</button></div>
+  <div id="figure-dialog-body" class="figure-dialog-body"></div>
+</dialog>
+<dialog id="translation-dialog" aria-labelledby="translation-dialog-title">
+  <form id="translation-form">
+    <h2 id="translation-dialog-title" data-i18n="translation.edit">編輯譯文</h2>
+    <p id="translation-original" class="translation-original"></p>
+    <label class="field"><span data-i18n="translation.label">譯文</span><textarea id="translation-input" rows="4" required></textarea></label>
+    <p id="translation-error" class="message" role="alert"></p>
+    <div class="actions"><button class="btn primary" type="submit" data-i18n="translation.save">儲存</button><button class="btn" id="translation-cancel" type="button" data-i18n="translation.cancel">取消</button></div>
+  </form>
+</dialog>
 <script type="module" src="app.mjs"></script>
 </body>
 </html>

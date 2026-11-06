@@ -1,7 +1,22 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { snapshotKey, saveSnapshot, readSnapshot, clearSnapshot, clearModeSnapshots, hasModeSnapshots, wrongWordAt, comparison, bestResult, saveBest, passageId } from '../site/practice.mjs';
+import { snapshotKey, saveSnapshot, readSnapshot, clearSnapshot, clearModeSnapshots, hasModeSnapshots, lastArticleScope, wrongWordAt, comparison, bestResult, saveBest, passageId } from '../site/practice.mjs';
 import { wordPage } from '../site/vocabulary.mjs';
+
+test('last unfinished article scope is remembered separately for each lesson', () => {
+  const storage = { data:{}, getItem(k) { return this.data[k] ?? null; }, setItem(k,v) { this.data[k] = v; } };
+  const first = snapshotKey('a', 'article', '0', 'full');
+  const second = snapshotKey('a', 'article', '1', 'random');
+  saveSnapshot(storage, first, { input:'one' });
+  saveSnapshot(storage, second, { input:'two' });
+  saveSnapshot(storage, snapshotKey('b', 'article', 'all', 'full'), { input:'other' });
+  assert.deepEqual(lastArticleScope(storage, 'a'), { section:'1', passage:'random' });
+  saveSnapshot(storage, first, { input:'again' });
+  assert.deepEqual(lastArticleScope(storage, 'a'), { section:'0', passage:'full' });
+  clearSnapshot(storage, first);
+  assert.deepEqual(lastArticleScope(storage, 'a'), { section:'1', passage:'random' });
+  assert.equal(lastArticleScope(storage, 'missing'), null);
+});
 
 test('separate practice scopes survive saving and removal', () => {
   const storage = { data:{}, getItem(k) { return this.data[k] ?? null; }, setItem(k,v) { this.data[k] = v; } };

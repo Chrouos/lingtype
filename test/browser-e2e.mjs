@@ -23,6 +23,7 @@ try {
   await page.goto(base, { settleMs:400 });
   await page.eval(() => { localStorage.clear(); });
   await page.goto(base, { settleMs:600 });
+  for (let i = 0; i < 40 && await page.eval(`document.getElementById('lesson-chooser')?.hidden !== false`); i++) await pause(100);
   assert.equal(await page.eval(`document.getElementById('lesson-chooser').hidden`), false);
   await page.eval(`document.getElementById('preview-start').click()`);
   assert.equal(await page.eval('document.documentElement.lang'), 'zh-Hant');
@@ -36,15 +37,23 @@ try {
   await shot('desktop-article-start');
   // Away from the text it dims with a prompt; typing fades everything around it.
   const look = () => page.eval(`({ veil:getComputedStyle(document.querySelector('.focus-veil')).opacity, bar:getComputedStyle(document.querySelector('.bar')).opacity, head:getComputedStyle(document.querySelector('.workspace-head')).opacity, text:getComputedStyle(document.getElementById('article-text')).opacity })`);
+  const expectLook = async expected => {
+    const deadline = Date.now() + 3000;
+    let actual;
+    do {
+      actual = await look();
+      if (Object.keys(expected).every(key => actual[key] === expected[key])) return;
+      await pause(50);
+    } while (Date.now() < deadline);
+    assert.deepEqual(actual, expected);
+  };
   assert.deepEqual(await look(), { veil:'1', bar:'1', head:'1', text:'0.55' });
   assert.equal(await text('focus-veil'), '點這裡或按任意鍵開始打字');
   await click('#article-text');
-  await pause(400);
-  assert.deepEqual(await look(), { veil:'0', bar:'0.18', head:'0.18', text:'1' });
+  await expectLook({ veil:'0', bar:'0.18', head:'0.18', text:'1' });
   await shot('desktop-focus-mode');
   await page.eval(`document.activeElement.blur()`);
-  await pause(400);
-  assert.deepEqual(await look(), { veil:'1', bar:'1', head:'1', text:'0.55' });
+  await expectLook({ veil:'1', bar:'1', head:'1', text:'0.55' });
   await shot('desktop-unfocused');
   // A printable key typed while a button has focus goes into the card.
   await page.eval(`document.getElementById('nav-practice').focus()`);
@@ -85,14 +94,18 @@ try {
   assert.ok(wpm > 0, 'result WPM is positive');
   await shot('desktop-result-zh');
 
-  // Tapping a word adds it to word practice; built-in words start picked.
-  assert.equal(await page.eval(`document.querySelector('.pick[data-pick="seedlings"]').classList.contains('picked')`), true);
-  await click('.pick[data-pick="garden"]');
+  // Result-page selection reflects the notebook, independently of built-in lesson words.
+  await page.eval(`window.confirm = () => true`);
+  assert.equal(await page.eval(`document.querySelector('.pick[data-pick="seedlings"]').classList.contains('picked')`), false);
+  await page.eval(`document.querySelector('.pick[data-pick="garden"]').focus()`);
+  await page.send('Input.dispatchKeyEvent', {type:'keyDown', key:' ', code:'Space', windowsVirtualKeyCode:32});
+  await page.send('Input.dispatchKeyEvent', {type:'keyUp', key:' ', code:'Space', windowsVirtualKeyCode:32});
   assert.equal(await page.eval(`document.querySelector('.pick[data-pick="garden"]').classList.contains('picked')`), true);
-  assert.equal(await text('pick-count'), '6');
+  assert.equal(await page.eval(`document.querySelector('.pick[data-pick="garden"]').getAttribute('aria-pressed')`), 'true');
+  assert.equal(await text('pick-count'), '1');
   assert.match(await text('vocab-list'), /garden/);
   await click('.pick[data-pick="garden"]');
-  assert.equal(await text('pick-count'), '5');
+  assert.equal(await text('pick-count'), '0');
   // A drag selection shows a floating button that adds every word in it.
   await page.eval(`(() => { const nodes = [...document.querySelectorAll('#review-text .pick')]; const range = document.createRange(); range.setStartBefore(nodes.find(n => n.dataset.pick === 'small')); range.setEndAfter(nodes.find(n => n.dataset.pick === 'behind')); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(range); })()`);
   await pause(150);
@@ -102,7 +115,7 @@ try {
   await page.eval(`document.getElementById('save-selected-words').click()`);
   assert.match(await text('selection-message'), /已加入 3 個單字/);
   assert.equal(await page.eval(`['small','garden','behind'].every(w => document.querySelector('.pick[data-pick="' + w + '"]').classList.contains('picked'))`), true);
-  assert.equal(await text('pick-count'), '8');
+  assert.equal(await text('pick-count'), '3');
   await shot('desktop-result-picked');
 
   // Each text is recorded on its own: the finished one and the stopped one.
@@ -297,6 +310,10 @@ try {
   // Phone layout has no horizontal scroll.
   await page.setViewport({ width:390, height:844, mobile:true });
   await pause(200);
+  assert.equal(await page.eval(`getComputedStyle(document.getElementById('restart')).display`), 'none');
+  await page.eval(`document.getElementById('more-menu').open = true`);
+  assert.notEqual(await page.eval(`getComputedStyle(document.getElementById('menu-restart')).display`), 'none');
+  await page.eval(`document.getElementById('more-menu').open = false`);
   const overflow = () => page.eval(`[...document.querySelectorAll('body *')].filter(n => n.getBoundingClientRect().right > 391 && getComputedStyle(n).position !== 'fixed').slice(0, 5).map(n => n.tagName + '#' + n.id + '.' + n.className + ' ' + Math.round(n.getBoundingClientRect().right)).join(', ')`);
   assert.ok(await page.eval(`document.documentElement.scrollWidth <= 390`), `no horizontal scroll on a phone: ${await overflow()}`);
   await shot('mobile-imported-zh');

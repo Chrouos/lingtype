@@ -1,4 +1,6 @@
 import io
+
+NL = chr(10)
 import json
 import sys
 import tempfile
@@ -84,6 +86,41 @@ class FileImportTests(unittest.TestCase):
         result = extract_file('paper.pdf', tiny_pdf('Typing builds reading fluency.'))
         self.assertEqual(result['text'], 'Typing builds reading fluency.')
         self.assertEqual(result['title'], 'paper')
+        self.assertNotIn('sections', result)
+        self.assertEqual(result['pages'], [1])
+
+    def test_running_headers_and_page_numbers_are_dropped(self):
+        from importers import without_running_lines
+        pages = ['Paper title\nAlpha one.\n1', 'Paper title\nBeta two.\n2', 'Paper title\nGamma three.\n3']
+        self.assertEqual(without_running_lines(pages), ['Alpha one.', 'Beta two.', 'Gamma three.'])
+        self.assertEqual(without_running_lines(['Only\nOne.', 'Two.']), ['Only\nOne.', 'Two.'])
+
+    def test_numbers_in_the_text_are_not_taken_for_page_numbers(self):
+        from importers import without_running_lines
+        pages = ['My Paper' + NL + 'Intro text here.' + NL + '1', 'My Paper' + NL + 'more text' + NL + '2', 'My Paper' + NL + 'Total' + NL + '1024' + NL + '3',
+                 'My Paper' + NL + '2024' + NL + 'Results show x.' + NL + '4', 'My Paper' + NL + 'end.' + NL + '5']
+        self.assertEqual(without_running_lines(pages), ['Intro text here.', 'more text', 'Total' + NL + '1024', '2024' + NL + 'Results show x.', 'end.'])
+
+    def test_a_symbol_drawn_for_a_caption_colon_becomes_a_colon(self):
+        from unittest.mock import patch
+        class Page:
+            def extract_text(self): return 'Figure 2' + chr(0x22C3) + chr(0xFE00) + ' The burden of context.'
+        class Reader:
+            def __init__(self, data): self.pages, self.metadata = [Page()], {}
+        with patch('pypdf.PdfReader', Reader):
+            self.assertEqual(extract_file('paper.pdf', b'%PDF')['text'], 'Figure 2: The burden of context.')
+
+    def test_pdf_pages_become_sections_that_remember_their_page(self):
+        from pypdf import PdfReader, PdfWriter
+        writer = PdfWriter()
+        for text in ('First page words.', '', 'Third page words.'):
+            writer.add_page(PdfReader(io.BytesIO(tiny_pdf(text))).pages[0])
+        out = io.BytesIO()
+        writer.write(out)
+        result = extract_file('book.pdf', out.getvalue())
+        self.assertEqual(result['sections'], [{'title': 'p. 1', 'text': 'First page words.', 'page': 1}, {'title': 'p. 3', 'text': 'Third page words.', 'page': 3}])
+        self.assertEqual(result['text'], 'First page words.\n\nThird page words.')
+        self.assertEqual(result['pages'], [1, 3])
 
     def test_subtitles_and_rejections(self):
         srt = '1\n00:00:01,000 --> 00:00:02,000\nHello there.\n\n2\n00:00:02,000 --> 00:00:03,000\n<i>General Kenobi.</i>\n'
@@ -97,6 +134,27 @@ class FileImportTests(unittest.TestCase):
 
 
 class WebAndYoutubeTests(unittest.TestCase):
+    def test_https_uses_the_original_hostname_for_certificate_verification(self):
+        with patch('socket.getaddrinfo', return_value=[(2, 1, 6, '', ('93.184.216.34', 443))]), patch('socket.socket') as socket_class, patch('ssl.SSLContext.wrap_socket', autospec=True, side_effect=OSError('stop')) as wrap:
+            with self.assertRaises(OSError): importers.fetch_article('https://example.com/')
+            self.assertEqual(socket_class.return_value.connect.call_args.args[0], ('93.184.216.34', 443))
+            self.assertEqual(wrap.call_args.kwargs['server_hostname'], 'example.com')
+            self.assertTrue(wrap.call_args.args[0].check_hostname)
+
+    def test_fetch_connects_to_validated_address_without_a_second_dns_lookup(self):
+        from unittest.mock import MagicMock
+        response = MagicMock()
+        response.getheader.return_value = None
+        response.status = 200
+        response.headers.get.return_value = 'text/html'
+        response.headers.get_content_charset.return_value = 'utf-8'
+        response.read.return_value = b'<article><p>This is a public article with enough content to import successfully.</p></article>'
+        with patch('socket.getaddrinfo', return_value=[(2, 1, 6, '', ('93.184.216.34', 80))]) as dns, patch('http.client.HTTPConnection.connect', autospec=True) as connect:
+            connect.side_effect = OSError('stopped after connection target is selected')
+            with self.assertRaises(OSError): importers.fetch_article('http://example.com/')
+            self.assertEqual(dns.call_count, 1)
+            self.assertEqual(connect.call_args.args[0].host, '93.184.216.34')
+
     def test_private_addresses_are_refused(self):
         def resolve(addresses):
             return lambda host, port: [(None, None, None, None, (address, port)) for address in addresses]

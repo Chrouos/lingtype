@@ -183,6 +183,39 @@ def epub_to_text(data):
     return {'title': book_title.strip()[:100], 'text': '\n\n'.join(section['text'] for section in sections), 'sections': sections}
 
 
+def without_running_lines(pages):
+    """Drop running headers and footers: a first or last line that recurs on most pages, page numbers aside."""
+    shape = lambda line: re.sub(r'\d+', '#', line.strip().lower())
+    edges = [[line for line in page.split('\n') if line.strip()] for page in pages]
+    needed = max(3, len([lines for lines in edges if lines]) * 0.4)
+    counts, offsets = {}, {}
+    for index, lines in enumerate(edges):
+        for line in {shape(line) for line in lines[:2] + lines[-2:]} - {'#'}:
+            counts[line] = counts.get(line, 0) + 1
+        # A bare number at a page edge is a page number when it keeps the same distance from the page count.
+        for line in {line.strip() for line in lines[:2] + lines[-2:] if line.strip().isdigit()}:
+            offsets[int(line) - index] = offsets.get(int(line) - index, 0) + 1
+    running = {line for line, count in counts.items() if count >= needed and len(line) <= 120}
+    offset = max(offsets, key=offsets.get) if offsets and max(offsets.values()) >= needed else None
+    if not running and offset is None:
+        return pages
+
+    def edge(line, index):
+        stripped = line.strip()
+        if stripped.isdigit(): return offset is not None and int(stripped) - index == offset
+        return not stripped or shape(line) in running
+
+    cleaned = []
+    for index, page in enumerate(pages):
+        lines = page.split('\n')
+        for _ in range(4):
+            if lines and edge(lines[0], index): lines = lines[1:]
+        for _ in range(4):
+            if lines and edge(lines[-1], index): lines = lines[:-1]
+        cleaned.append('\n'.join(lines))
+    return cleaned
+
+
 def pdf_to_text(data):
     try:
         from pypdf import PdfReader
@@ -192,16 +225,24 @@ def pdf_to_text(data):
         raise RuntimeError('尚未安裝 pypdf，請執行 python -m pip install --target .deps -r requirements.txt。') from error
     except Exception as error:
         raise ValueError('PDF 內容無法讀取，可能是掃描圖片或受密碼保護。') from error
-    text = '\n\n'.join(pages)
-    text = re.sub(r'(\w)-\n(\w)', r'\1\2', text)
-    # A line that ends a sentence and is shorter than the page measure usually ends a paragraph.
-    text = re.sub(r'([.!?"”])\n(?=[A-Z“"])', r'\1\n\n', text)
+    # Each page with text becomes a section that remembers its page number, so the reader can show the page beside it.
+    pages = without_running_lines(pages)
+    sections = []
+    for number, page in enumerate(pages, 1):
+        page = re.sub(r'(\w)-\n(\w)', r'\1\2', page)
+        # Some paper fonts draw the colon after a figure or table number as an unrelated symbol.
+        page = re.sub(r'\b((?:Figure|Fig\.|Table)\s*\d+)\s*\u22c3[\ufe00-\ufe0f]?', r'\1:', page)
+        # A line that ends a sentence and is shorter than the page measure usually ends a paragraph.
+        page = tidy(re.sub(r'([.!?"”])\n(?=[A-Z“"])', r'\1\n\n', page))
+        if page:
+            sections.append({'title': f'p. {number}', 'text': page, 'page': number})
     title = ''
     try:
         title = str((reader.metadata or {}).get('/Title') or '')
     except Exception:
         pass
-    return {'title': title.strip()[:100], 'text': tidy(text)}
+    return {'title': title.strip()[:100], 'text': '\n\n'.join(section['text'] for section in sections),
+            **({'sections': sections} if len(sections) > 1 else {}), **({'pages': [s['page'] for s in sections]} if sections else {})}
 
 
 def subtitle_to_text(data):
@@ -239,7 +280,7 @@ def extract_file(name, data):
 
 
 # Web pages: only public addresses, so the server cannot be pointed at the local network.
-def public_url(url):
+def resolve_public_url(url):
     parts = urlsplit(url.strip())
     if parts.scheme not in ('http', 'https') or not parts.hostname or parts.username or parts.password:
         raise ValueError('請輸入 http 或 https 網址。')
@@ -249,17 +290,53 @@ def public_url(url):
         raise ValueError('找不到這個網址的伺服器。') from error
     if not addresses or not all(ipaddress.ip_address(address.split('%')[0]).is_global for address in addresses):
         raise ValueError('不能匯入本機或內部網路的網址。')
-    return url.strip()
+    return url.strip(), sorted(addresses)[0]
+
+
+def public_url(url):
+    return resolve_public_url(url)[0]
 
 
 class PublicRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return super().redirect_request(req, fp, code, msg, headers, public_url(urljoin(req.full_url, newurl)))
+        return super().redirect_request(req, fp, code, msg, headers, urljoin(req.full_url, newurl))
+
+
+def public_opener():
+    # Validate each request, including redirects, and connect to the validated IP.
+    import http.client
+    from urllib.request import HTTPHandler, HTTPSHandler, ProxyHandler
+
+    class CheckedHTTP(HTTPHandler):
+        def http_open(self, req):
+            _, address = resolve_public_url(req.full_url)
+            port = urlsplit(req.full_url).port or 80
+            return self.do_open(lambda host, **kw: http.client.HTTPConnection(address, port, **kw), req)
+
+    class CheckedHTTPS(HTTPSHandler):
+        def https_open(self, req):
+            parts = urlsplit(req.full_url)
+            _, address = resolve_public_url(req.full_url)
+            class Connection(http.client.HTTPSConnection):
+                def connect(self):
+                    sock = socket.socket(socket.AF_INET6 if ':' in address else socket.AF_INET, socket.SOCK_STREAM)
+                    try:
+                        sock.settimeout(self.timeout)
+                        sock.connect((address, parts.port or 443))
+                        self.sock = self._context.wrap_socket(sock, server_hostname=parts.hostname)
+                    except BaseException:
+                        sock.close()
+                        raise
+            return self.do_open(Connection, req, context=self._context)
+
+    return build_opener(ProxyHandler({}), CheckedHTTP(), CheckedHTTPS(), PublicRedirect())
 
 
 def fetch_article(url, opener=None):
-    request = Request(public_url(url), headers={'User-Agent': 'Mozilla/5.0 (Lingtype personal reading tool)', 'Accept': 'text/html,application/xhtml+xml'})
-    with (opener or build_opener(PublicRedirect)).open(request, timeout=20) as response:
+    if urlsplit(url.strip()).scheme not in ('http', 'https'):
+        raise ValueError('請輸入 http 或 https 網址。')
+    request = Request(url.strip(), headers={'User-Agent': 'Mozilla/5.0 (Lingtype personal reading tool)', 'Accept': 'text/html,application/xhtml+xml'})
+    with (opener or public_opener()).open(request, timeout=20) as response:
         kind = response.headers.get('Content-Type', '')
         if 'html' not in kind:
             raise ValueError('這個網址不是網頁文章。')

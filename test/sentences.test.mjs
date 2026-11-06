@@ -1,7 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { sentenceAt, advanceSentenceInput, alignedTranslations, passageTranslations, separatorPositions, MISSED } from '../site/sentences.mjs';
-import { articleResult, liveArticleStats } from '../site/typing.mjs';
+import { sentenceAt, advanceSentenceInput, createSentenceInput, alignedTranslations, passageTranslations, separatorPositions, MISSED } from '../site/sentences.mjs';
+import { articleResult, typedCounts, sessionStats } from '../site/typing.mjs';
+
+test('prepared sentence input preserves separator behaviour across edits', () => {
+  const sentences = ['One.\n\n', 'Two. ', 'Three.'];
+  const advance = createSentenceInput(sentences);
+  assert.equal(advance('One.', 'One. '), 'One.\n\n');
+  assert.equal(advance('One.\n\n', 'One.\n\nT'), 'One.\n\nT');
+  assert.equal(advance('One.\n\n', 'One.\n'), 'One.');
+  assert.equal(advance('One.', 'One.T'), `One.${MISSED}\nT`);
+});
 
 test('the space after a sentence is typed, and one space covers a paragraph break', () => {
   const sentences = ['The city was quiet. ', 'A gentle breeze.\n\n', 'Rain fell.'];
@@ -21,7 +30,7 @@ test('a skipped space counts as one mistake without shifting the rest', () => {
   const typed = advanceSentenceInput(sentences, 'Hi.', 'Hi.B');
   assert.equal(typed, `Hi.${MISSED}B`);
   const ignored = separatorPositions(sentences);
-  assert.equal(liveArticleStats('Hi. Bye.', typed, 60000, ignored).accuracy, 80);
+  assert.equal(sessionStats(typedCounts('Hi. Bye.', typed, ignored), 60000).accuracy, 80);
   assert.equal(articleResult('Hi. Bye.', 'Hi. Bye.', 60000, ignored).accuracy, 100);
 });
 

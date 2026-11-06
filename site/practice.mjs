@@ -5,8 +5,17 @@ function readAll(storage) {
 }
 export function readSnapshot(storage, id) { return readAll(storage)[id] || null; }
 export function saveSnapshot(storage, id, value) {
-  const data = readAll(storage); data[id] = value;
+  const data = readAll(storage); delete data[id]; data[id] = value;
   try { storage?.setItem(key, JSON.stringify(data)); return true; } catch { return false; }
+}
+export function lastArticleScope(storage, lessonId) {
+  for (const id of Object.keys(readAll(storage)).reverse()) {
+    try {
+      const parts = JSON.parse(id);
+      if (Array.isArray(parts) && parts.length === 4 && parts[0] === lessonId && parts[1] === 'article' && typeof parts[2] === 'string' && ['full', 'random'].includes(parts[3])) return { section:parts[2], passage:parts[3] };
+    } catch { /* ignore unrelated keys */ }
+  }
+  return null;
 }
 export function clearSnapshot(storage, id) {
   const data = readAll(storage); delete data[id];

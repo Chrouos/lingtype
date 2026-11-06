@@ -1,15 +1,32 @@
+export function readTranslationCache(storage) {
+  try {
+    const value = JSON.parse(storage?.getItem('lingtype-translations') || '{}');
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  } catch { return {}; }
+}
+
 export function createTranslationCache(storage, request, existing) {
-  let cache = existing;
-  if (!cache) { try { cache = JSON.parse(storage?.getItem('lingtype-translations') || '{}'); } catch { cache = {}; } }
+  const cache = existing && typeof existing === 'object' && !Array.isArray(existing) ? existing : readTranslationCache(storage);
   const pending = new Map();
+  const revisions = new Map();
   const key = (sentence, language) => `${language}\u0000${sentence}`;
   const get = (sentence, language) => {
     const value = cache[key(sentence, language)];
-    return typeof value === 'string' && value.trim() && value.trim() !== sentence ? value : '';
+    return typeof value === 'string' && value.trim() && (value.trim() !== sentence || cache[`manual\u0000${key(sentence, language)}`]) ? value : '';
   };
+  function set(sentence, language, value) {
+    if (!sentence || !['zh', 'ja', 'ko'].includes(language) || typeof value !== 'string' || !value.trim()) return false;
+    const id = key(sentence, language);
+    revisions.set(id, (revisions.get(id) || 0) + 1);
+    cache[id] = value.trim();
+    cache[`manual\u0000${id}`] = '1';
+    try { storage?.setItem('lingtype-translations', JSON.stringify(cache)); return true; } catch { return false; }
+  }
   async function translate(sentences, language) {
-    const missing = [...new Set(sentences.filter(sentence => sentence && !get(sentence, language) && !pending.has(key(sentence, language))))];
+    // Python counts Unicode code points; avoid rejecting valid neighbours of an oversized sentence.
+    const missing = [...new Set(sentences.filter(sentence => sentence && [...sentence].length <= 15000 && !get(sentence, language) && !pending.has(key(sentence, language))))];
     const resolvers = new Map();
+    const started = new Map(missing.map(sentence => [sentence, revisions.get(key(sentence, language)) || 0]));
     for (const sentence of missing) {
       let resolve;
       const promise = new Promise(done => { resolve = done; });
@@ -22,7 +39,7 @@ export function createTranslationCache(storage, request, existing) {
         try { values = await request(missing, language); } catch { /* leave missing translations retryable */ }
         missing.forEach((sentence, i) => {
           const value = values?.[i];
-          if (typeof value === 'string' && value.trim() && value.trim() !== sentence) cache[key(sentence, language)] = value;
+          if ((revisions.get(key(sentence, language)) || 0) === started.get(sentence) && typeof value === 'string' && value.trim() && value.trim() !== sentence) cache[key(sentence, language)] = value;
           pending.delete(key(sentence, language));
           resolvers.get(sentence)(get(sentence, language));
         });
@@ -31,13 +48,15 @@ export function createTranslationCache(storage, request, existing) {
     }
     return Promise.all(sentences.map(sentence => get(sentence, language) || pending.get(key(sentence, language)) || ''));
   }
-  async function prefetch(sentences, language) {
+  async function prefetch(sentences, language, onProgress = () => {}) {
     const unique = [...new Set(sentences.filter(Boolean))];
+    let failed = 0;
     for (let i = 0; i < unique.length; i += 8) {
       const result = await translate(unique.slice(i, i + 8), language);
-      if (result.some(value => !value)) return false;
+      failed += result.filter(value => !value).length;
+      onProgress({ done:Math.min(i + 8, unique.length), total:unique.length, failed });
     }
-    return true;
+    return failed === 0;
   }
-  return { get, translate, prefetch };
+  return { get, set, translate, prefetch };
 }
