@@ -17,6 +17,7 @@ import { createTranslationCache, readTranslationCache } from './translation-cach
 import { openLargeDatabase, createLargeStorage } from './storage.mjs';
 import { acquireEditorLock } from './editor-lock.mjs';
 import { createBackup, readBackup, restoreBackup } from './backup.mjs';
+import { cleanShelf, shelfBooks, categories, typingMinutes, coverColors, readVisitor } from './community.mjs';
 
 const $ = (id) => document.getElementById(id);
 const scopeSettings = $('scope-settings'), phoneLayout = globalThis.matchMedia?.('(max-width: 720px)');
@@ -74,7 +75,7 @@ const showView = setupViews($, name => {
   currentView = name;
   if (name !== 'practice' && started !== null && !paused && !finished) $('pause')?.click();
   if (name === 'notebook') renderNotebook();
-  if (name === 'public') { if ($('public-detail')) $('public-detail').hidden = true; if ($('public-books')) $('public-books').hidden = false; loadPublicBooks(); }
+  if (name === 'public') { showShelf(true); loadPublicBooks(); }
   if (globalThis.location && globalThis.history) globalThis.history.replaceState(null, '', `#${name}`);
 }, initialView);
 let mode = 'article', wordIndex = 0, errors = 0, started = null, finished = false, input = '', articleText = '', sentenceTranslations = null, translationRun = 0;
@@ -273,6 +274,7 @@ function startTimer() {
   lastKeyAt = performance.now();
   if (started !== null) return;
   started = lastKeyAt;
+  notePublicStart();
   timer = setInterval(() => { if (performance.now() - lastKeyAt > IDLE_MS) holdClock(lastKeyAt); else updateMetrics(); }, 1000);
 }
 function holdClock(at = performance.now()) {
@@ -443,6 +445,7 @@ function finish(early = false) {
   const resultStats = mode === 'article' ? articleResult(early ? articleText.slice(0, input.length) : articleText, input, time, autoSeparators) : null;
   const reached = mode === 'article' ? Math.round(input.length / articleText.length * 100) : Math.round(wordIndex / currentWords().length * 100);
   const record = { lessonId:lesson().id, title:lesson().title, mode, passage:passageId(mode === 'article' ? articleText : currentWords().map(w => w[0]).join(' ')), wpm:resultStats?.wpm ?? wordWpm, accuracy:resultStats?.accuracy ?? null, errors:mode === 'word' ? errors : resultStats.errors, elapsed:time, date:new Date().toISOString(), ...(early ? { partial:true } : {}) };
+  if (!early) notePublicFinish(record);
   const previous = comparison(readHistory(storage), record);
   const best = Math.max(bestResult(storage, record) ?? 0, record.wpm);
   const hasProgress = mode === 'article' ? input.length > 0 : wordIndex > 0 || input.length > 0;
@@ -978,19 +981,25 @@ async function translateWord(item, word, selectedLanguage) {
   }
 }
 $('picker-start')?.addEventListener('click', () => setMode('word'));
+async function publishLesson(item) {
+  const workbook = createWorkbook(item, translationCache);
+  const body = JSON.stringify(workbook); readWorkbook(body);
+  const response = await fetch('/api/workbooks', {method:'POST', headers:{'Content-Type':'application/json'}, body});
+  const data = await response.json();
+  if (!response.ok || !/^[0-9a-f]{32}$/.test(data.id || '') || typeof data.ownerKey !== 'string') throw new Error(data.error || '');
+  const ownerKeys = readOwnerKeys(); ownerKeys[data.id] = data.ownerKey;
+  let canUnpublish = true;
+  try { storage.setItem('lingtype-published-keys', JSON.stringify(ownerKeys)); } catch { canUnpublish = false; }
+  // The sharer's own practice of the lesson counts toward the shared book too.
+  item.publicId = data.id; if (item.custom) persistLibrary();
+  return { data, canUnpublish };
+}
 $('publish-workbook')?.addEventListener('click', async () => {
   closeMenu();
   if (!globalThis.confirm(t('confirm.publish'))) return;
   const button = $('publish-workbook'); button.disabled = true;
   try {
-    const workbook = createWorkbook(lesson(), translationCache);
-    const body = JSON.stringify(workbook); readWorkbook(body);
-    const response = await fetch('/api/workbooks', {method:'POST', headers:{'Content-Type':'application/json'}, body});
-    const data = await response.json();
-    if (!response.ok || !/^[0-9a-f]{32}$/.test(data.id || '') || typeof data.ownerKey !== 'string') throw new Error(data.error || '');
-    const ownerKeys = readOwnerKeys(); ownerKeys[data.id] = data.ownerKey;
-    let canUnpublish = true;
-    try { storage.setItem('lingtype-published-keys', JSON.stringify(ownerKeys)); } catch { canUnpublish = false; }
+    const { data, canUnpublish } = await publishLesson(lesson());
     const notice = $('workspace-notice');
     const url = new URL(globalThis.location.href); url.hash = `book-${data.id}`;
     notice.textContent = t(['localhost','127.0.0.1'].includes(url.hostname) ? 'notice.local' : 'notice.shared') + ' ';
@@ -1128,6 +1137,68 @@ $('arxiv-form').addEventListener('submit', async event => {
   } catch (error) { message.textContent = error instanceof SyntaxError ? t('import.needServer') : t('import.arxivFail', { error:localError(error.message, 'import.urlBad') }); }
   finally { button.disabled = false; }
 });
+// The community bookshelf: shared books with covers, likes, readers, completion rates, rankings and comments.
+const BOOK_ID = /^[0-9a-f]{32}$/;
+const visitor = readVisitor(storage);
+let shelf = { books:[], ranking:[], comments:[] }, shelfCategory = '', openBookId = null;
+const coverVersions = {};
+const startedPublic = new Set();
+function readerName() { try { return (storage?.getItem('lingtype-reader-name') || '').slice(0, 40); } catch { return ''; } }
+function saveReaderName(name) { try { storage?.setItem('lingtype-reader-name', name.slice(0, 40)); } catch { /* the name is used for this visit only */ } }
+// Imports file their lessons under short codes; shelves show them by name.
+function categoryName(category) { const key = `public.cat.${category}`, name = t(key); return name === key ? category : name; }
+function postCommunity(id, action, body) {
+  return Promise.resolve().then(() => fetch(`/api/workbooks/${id}/community/${action}`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)}));
+}
+function notePublicStart() {
+  const id = lesson()?.publicId;
+  if (!BOOK_ID.test(id || '') || startedPublic.has(id)) return;
+  startedPublic.add(id);
+  postCommunity(id, 'start', { visitor }).catch(() => startedPublic.delete(id));
+}
+// Only an article typed to its end counts as finishing the book: the whole text, or the last of its sections.
+function notePublicFinish(record) {
+  const item = lesson(), id = item?.publicId;
+  if (!BOOK_ID.test(id || '') || mode !== 'article' || $('passage-mode')?.value === 'random') return;
+  const section = $('section-mode')?.value || 'all';
+  if (item.sections?.length && section !== 'all' && Number(section) !== item.sections.length - 1) return;
+  const wpm = Number(record.wpm), accuracy = Number(record.accuracy);
+  // Runs faster than anyone types were pasted or scripted; the server refuses them, so they are not sent.
+  if (!(wpm > 0 && wpm <= 250) || !(accuracy >= 0 && accuracy <= 100)) return;
+  postCommunity(id, 'attempts', { visitor, author:readerName(), wpm, accuracy }).catch(() => {});
+}
+function showShelf(on) {
+  if ($('public-detail')) $('public-detail').hidden = on;
+  if ($('public-shelf')) $('public-shelf').hidden = !on; else if ($('public-books')) $('public-books').hidden = !on;
+  if (on) openBookId = null;
+}
+function coverHtml(book, size = '') {
+  const [ink, paper] = coverColors(book.id), version = coverVersions[book.id] ? `?v=${coverVersions[book.id]}` : '';
+  return `<div class="cover${size}" style="--ink:${ink};--paper:${paper}"><span class="cover-tag">${escapeHtml(categoryName(book.category) || 'Lingtype')}</span><span class="cover-title">${escapeHtml(book.title)}</span>${book.hasCover ? `<img src="/api/workbooks/${book.id}/cover${version}" alt="" loading="lazy">` : ''}</div>`;
+}
+const rateText = book => book.completionRate === null ? t('public.rateNone') : t('public.rate', { n:book.completionRate });
+function renderShelf() {
+  const list = $('public-books'), message = $('public-message'); if (!list || !message) return;
+  const books = shelfBooks(shelf.books, { query:$('public-search')?.value || '', category:shelfCategory, sort:$('public-sort')?.value || 'likes' });
+  const ownerKeys = readOwnerKeys();
+  message.textContent = !shelf.books.length ? t('public.empty') : books.length ? '' : t('public.noMatch');
+  list.innerHTML = books.map(book => `<li class="shelf-book"><button class="cover-button" type="button" data-book-id="${book.id}" tabindex="-1" aria-hidden="true">${coverHtml(book)}</button><h3><button class="book" type="button" data-book-id="${book.id}">${escapeHtml(book.title)}</button></h3><p class="book-meta">${escapeHtml([categoryName(book.category), book.words ? t('public.minutes', { n:typingMinutes(book.words) }) : ''].filter(Boolean).join(' · '))}</p><p class="book-stats"><span aria-label="${escapeHtml(t('public.likesAria', { n:book.likes }))}">♥ ${book.likes}</span><span>${escapeHtml(t('public.reads', { n:book.reads }))}</span><span>${escapeHtml(rateText(book))}</span></p>${ownerKeys[book.id] ? `<button class="btn-quiet" type="button" data-remove-book="${book.id}">${escapeHtml(t('public.remove'))}</button>` : ''}</li>`).join('');
+}
+function renderFilters() {
+  const box = $('public-filters'); if (!box) return;
+  const all = categories(shelf.books);
+  if (!all.includes(shelfCategory)) shelfCategory = '';
+  box.hidden = all.length < 2;
+  box.innerHTML = ['', ...all].map(category => `<button type="button" class="filter" data-category="${escapeHtml(category)}" aria-pressed="${category === shelfCategory}">${escapeHtml(category ? categoryName(category) : t('public.all'))}</button>`).join('');
+}
+function rankingHtml(rows, withTitle) {
+  return rows.map((row, index) => `<li><strong>${String(index + 1).padStart(2, '0')}</strong><div><b>${escapeHtml(row.author)}</b>${withTitle ? `<button class="link" type="button" data-book-id="${row.bookId}">${escapeHtml(row.title)}</button>` : `<span>${escapeHtml(t('public.accuracy', { n:Math.round(row.accuracy) }))}</span>`}</div><span class="wpm">${Math.round(row.wpm)} WPM</span></li>`).join('');
+}
+const when = date => { const value = new Date(date); return Number.isNaN(value.getTime()) ? '' : value.toLocaleDateString(dateLocale[language.value]); };
+function renderRail() {
+  if ($('public-ranking')) $('public-ranking').innerHTML = shelf.ranking.length ? rankingHtml(shelf.ranking, true) : `<li class="rail-empty">${escapeHtml(t('public.rankingEmpty'))}</li>`;
+  if ($('public-comments')) $('public-comments').innerHTML = shelf.comments.length ? shelf.comments.map(comment => `<li><p><b>${escapeHtml(comment.author)}</b> · <button class="link" type="button" data-book-id="${comment.bookId}">${escapeHtml(comment.title)}</button></p><p class="quote">${escapeHtml(comment.text)}</p><small>${escapeHtml(when(comment.createdAt))}</small></li>`).join('') : `<li class="rail-empty">${escapeHtml(t('public.recentEmpty'))}</li>`;
+}
 async function loadPublicBooks() {
   const list = $('public-books'), message = $('public-message'); if (!list || !message) return;
   const run = ++publicRun;
@@ -1136,27 +1207,125 @@ async function loadPublicBooks() {
     const response = await fetch('/api/workbooks'); const data = await response.json();
     if (run !== publicRun) return;
     if (!response.ok || !Array.isArray(data.books)) throw new Error(data.error || '');
-    message.textContent = data.books.length ? '' : t('public.empty');
-    const ownerKeys = readOwnerKeys(), locale = dateLocale[language.value];
-    list.innerHTML = data.books.filter(item => /^[0-9a-f]{32}$/.test(item.id) && typeof item.title === 'string').map(item => `<li><button class="book" type="button" data-book-id="${item.id}">${escapeHtml(item.title)}</button><span class="date">${escapeHtml(new Date(item.createdAt).toLocaleDateString(locale))}</span>${ownerKeys[item.id] ? `<button class="btn-quiet" type="button" data-remove-book="${item.id}">${escapeHtml(t('public.remove'))}</button>` : ''}</li>`).join('');
+    shelf = cleanShelf(data);
+    renderFilters(); renderShelf(); renderRail();
   } catch (error) { if (run === publicRun) message.textContent = localError(error.message, 'public.loadFail'); }
+}
+function statsText(book) {
+  return [`♥ ${book.likes}`, t('public.reads', { n:book.reads }), rateText(book), ...(book.starts ? [t('public.completed', { done:book.completions, started:book.starts })] : []), t('public.practices', { n:book.practiceCount })].join(' · ');
 }
 async function openPublicBook(id) {
   const detail = $('public-detail'), message = $('public-message');
-  if (!detail || !message || !/^[0-9a-f]{32}$/.test(id)) return;
+  if (!detail || !message || !BOOK_ID.test(id)) return;
   if (started !== null && !paused && !finished) $('pause')?.click();
   const run = ++publicRun;
-  showView('public'); currentView = 'public'; detail.hidden = true; $('public-books').hidden = false; message.textContent = t('public.loading');
+  showView('public'); currentView = 'public'; showShelf(true); message.textContent = t('public.loading');
   try {
     const response = await fetch(`/api/workbooks/${id}`); const data = await response.json();
     if (run !== publicRun) return;
     if (!response.ok) throw new Error(data.error || t('public.notFound'));
     const item = readWorkbook(JSON.stringify(data));
-    detail.innerHTML = `<h2>${escapeHtml(item.title)}</h2><p class="public-detail-text">${escapeHtml(item.text)}</p><div class="public-detail-actions"><button id="add-public-book" class="btn primary" type="button">${escapeHtml(t('public.add'))}</button><button id="public-back" class="btn" type="button">${escapeHtml(t('public.back'))}</button><span id="public-detail-message" class="message" role="status"></span></div>`;
-    detail.hidden = false; $('public-books').hidden = true; message.textContent = '';
-    $('add-public-book').addEventListener('click', () => { item.id = newId(); if (!saveCustom(item, 'public-detail-message')) $('public-detail-message').textContent = t('public.cancelled'); });
-    $('public-back').addEventListener('click', () => { detail.hidden = true; $('public-books').hidden = false; globalThis.history?.replaceState(null, '', '#public'); loadPublicBooks(); });
+    const book = shelf.books.find(entry => entry.id === id) || cleanShelf({ books:[{ id, title:item.title, category:typeof data.lesson?.category === 'string' ? data.lesson.category : '' }] }).books[0];
+    const owner = readOwnerKeys()[id];
+    const excerpt = item.text.length > 3000 ? `${item.text.slice(0, 3000)}…` : item.text;
+    detail.innerHTML = `<button id="public-back" class="btn-quiet back" type="button">${escapeHtml(t('public.back'))}</button><div class="detail-top"><div id="public-cover-box" class="detail-cover">${coverHtml(book, ' large')}</div><div class="detail-info"><p class="eyebrow">${escapeHtml(categoryName(book.category))}</p><h2>${escapeHtml(item.title)}</h2><p id="public-stats" class="detail-stats">${escapeHtml(statsText(book))}</p><p class="public-detail-text">${escapeHtml(excerpt)}</p><div class="public-detail-actions"><button id="add-public-book" class="btn primary" type="button">${escapeHtml(t('public.add'))}</button><button id="public-like" class="btn like" type="button" aria-pressed="false">♡ ${book.likes}</button>${owner ? `<label class="btn"><input id="public-cover-file" type="file" accept="image/png,image/jpeg,image/webp" hidden>${escapeHtml(t('public.cover'))}</label>` : ''}<span id="public-detail-message" class="message" role="status"></span></div></div></div><div class="detail-columns"><section><h3>${escapeHtml(t('public.bookRanking'))}</h3><ol id="public-book-ranking" class="rank-list"></ol></section><section><h3>${escapeHtml(t('public.comments'))}</h3><form id="public-comment-form" class="comment-form"><input id="public-name" maxlength="40" autocomplete="nickname" aria-label="${escapeHtml(t('public.name'))}" placeholder="${escapeHtml(t('public.namePlaceholder'))}"><textarea id="public-comment" maxlength="1000" rows="3" required aria-label="${escapeHtml(t('public.comment'))}" placeholder="${escapeHtml(t('public.comment'))}"></textarea><div class="form-foot"><button class="btn" type="submit">${escapeHtml(t('public.post'))}</button></div></form><ul id="public-comment-list" class="comment-list"></ul></section></div>`;
+    showShelf(false); openBookId = id; communityInfo = null; message.textContent = '';
+    if ($('public-name')) $('public-name').value = readerName();
+    $('add-public-book').addEventListener('click', () => practicePublicBook(id, item));
+    $('public-back').addEventListener('click', () => { showShelf(true); globalThis.history?.replaceState(null, '', '#public'); loadPublicBooks(); });
+    $('public-like')?.addEventListener('click', () => toggleLike(id));
+    $('public-cover-file')?.addEventListener('change', event => changeCover(id, event.target.files?.[0]));
+    $('public-comment-form')?.addEventListener('submit', event => { event.preventDefault(); postComment(id); });
+    $('public-comment-list')?.addEventListener('click', event => { const comment = event.target.dataset?.removeComment; if (comment) removeComment(id, comment); });
+    postCommunity(id, 'read', { visitor }).catch(() => {}).finally(() => loadCommunity(id));
   } catch (error) { if (run === publicRun) message.textContent = localError(error.message, 'public.notFound'); }
+}
+// Practising a shared book opens the copy already in the library, or adds one that remembers where it came from.
+function practicePublicBook(id, item) {
+  const index = lessons.findIndex(entry => entry.publicId === id);
+  if (index < 0) { item.id = newId(); item.publicId = id; if (!saveCustom(item, 'public-detail-message') && $('public-detail-message')) $('public-detail-message').textContent = t('public.cancelled'); return; }
+  if (!mayLeave()) return;
+  saveProgress(); lessonSelect.value = String(index); updateSections(); pickerPage = 0; mode = 'article'; loadPractice();
+  showView('practice'); currentView = 'practice';
+  lessonPreview?.open(index, false);
+  globalThis.history?.replaceState(null, '', '#practice');
+}
+let communityInfo = null;
+async function loadCommunity(id) {
+  try {
+    const response = await fetch(`/api/workbooks/${id}/community?visitor=${visitor}`); const data = await response.json();
+    if (openBookId !== id) return;
+    if (!response.ok) throw new Error(data.error || '');
+    communityInfo = data; paintCommunity(id);
+  } catch { if (openBookId === id && $('public-detail-message')) $('public-detail-message').textContent = t('public.statsFail'); }
+}
+function paintCommunity(id) {
+  const info = communityInfo; if (!info) return;
+  const book = cleanShelf({ books:[{ id, title:'', ...info, comments:Array.isArray(info.comments) ? info.comments.length : 0 }] }).books[0];
+  const known = shelf.books.find(entry => entry.id === id); if (known) Object.assign(known, { ...book, title:known.title, category:known.category, summary:known.summary, words:known.words });
+  if ($('public-stats')) $('public-stats').textContent = statsText(book);
+  const like = $('public-like');
+  if (like) { like.setAttribute('aria-pressed', String(info.liked === true)); like.textContent = `${info.liked ? '♥' : '♡'} ${book.likes}`; like.setAttribute('aria-label', t('public.likesAria', { n:book.likes })); }
+  const ranking = (Array.isArray(info.ranking) ? info.ranking : []).filter(row => row && typeof row.author === 'string' && Number.isFinite(row.wpm) && Number.isFinite(row.accuracy));
+  if ($('public-book-ranking')) $('public-book-ranking').innerHTML = ranking.length ? rankingHtml(ranking, false) : `<li class="rail-empty">${escapeHtml(t('public.rankingEmpty'))}</li>`;
+  const owner = readOwnerKeys()[id];
+  const comments = (Array.isArray(info.comments) ? info.comments : []).filter(comment => comment && BOOK_ID.test(comment.id) && typeof comment.author === 'string' && typeof comment.text === 'string');
+  if ($('public-comment-list')) $('public-comment-list').innerHTML = comments.length ? comments.map(comment => `<li><p><b>${escapeHtml(comment.author)}</b> <small>${escapeHtml(when(comment.createdAt))}</small>${owner ? ` <button class="btn-quiet" type="button" data-remove-comment="${comment.id}">${escapeHtml(t('public.deleteComment'))}</button>` : ''}</p><p class="quote">${escapeHtml(comment.text)}</p></li>`).join('') : `<li class="rail-empty">${escapeHtml(t('public.commentsEmpty'))}</li>`;
+}
+async function toggleLike(id) {
+  const button = $('public-like'); if (!button) return;
+  button.disabled = true;
+  try {
+    const liked = !(communityInfo?.liked);
+    const response = await postCommunity(id, 'like', { visitor, liked }); const data = await response.json();
+    if (!response.ok) throw new Error(data.error || '');
+    if (openBookId !== id) return;
+    // Before the numbers arrive only the button changes; loading them paints the rest.
+    if (communityInfo) { communityInfo = { ...communityInfo, liked, likes:data.likes }; paintCommunity(id); }
+    else { button.setAttribute('aria-pressed', String(liked)); button.textContent = `${liked ? '♥' : '♡'} ${data.likes}`; }
+  } catch (error) { if ($('public-detail-message')) $('public-detail-message').textContent = localError(error.message, 'public.likeFail'); }
+  finally { button.disabled = false; }
+}
+async function postComment(id) {
+  const text = $('public-comment')?.value.trim() || '', name = $('public-name')?.value.trim() || '';
+  if (!text) return;
+  saveReaderName(name);
+  try {
+    const response = await postCommunity(id, 'comments', { author:name, text }); const data = await response.json();
+    if (!response.ok) throw new Error(data.error || '');
+    $('public-comment').value = ''; loadCommunity(id);
+  } catch (error) { if ($('public-detail-message')) $('public-detail-message').textContent = localError(error.message, 'public.postFail'); }
+}
+async function removeComment(id, comment) {
+  if (!BOOK_ID.test(comment) || !globalThis.confirm(t('public.deleteConfirm'))) return;
+  try {
+    const response = await fetch(`/api/workbooks/${id}/community/comments/${comment}`, { method:'DELETE', headers:{'X-Owner-Key':readOwnerKeys()[id] || ''} }); const data = await response.json();
+    if (!response.ok) throw new Error(data.error || '');
+    loadCommunity(id);
+  } catch (error) { if ($('public-detail-message')) $('public-detail-message').textContent = localError(error.message, 'public.postFail'); }
+}
+async function uploadCover(id, file) {
+  if (!file) return;
+  if (file.size > 2_000_000) throw new Error(t('public.coverBig'));
+  const response = await fetch(`/api/workbooks/${id}/cover`, { method:'POST', headers:{'Content-Type':file.type || 'application/octet-stream', 'X-Owner-Key':readOwnerKeys()[id] || ''}, body:file });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || '');
+  coverVersions[id] = Date.now();
+}
+async function changeCover(id, file) {
+  const message = $('public-detail-message');
+  try {
+    await uploadCover(id, file);
+    const book = shelf.books.find(entry => entry.id === id); if (book) book.hasCover = true;
+    if ($('public-cover-box')) $('public-cover-box').innerHTML = coverHtml(book || { id, title:'', category:'', hasCover:true }, ' large');
+    if (message) message.textContent = t('public.coverSaved');
+  } catch (error) { if (message) message.textContent = localError(error.message, 'public.coverFail'); }
+}
+function openShelfBook(event) {
+  const target = event.target.closest?.('[data-book-id]') || event.target;
+  const id = target.dataset?.bookId;
+  if (!id || !BOOK_ID.test(id)) return;
+  globalThis.history?.replaceState(null, '', `#book-${id}`); openPublicBook(id);
 }
 $('public-books')?.addEventListener('click', async event => {
   const removeId = event.target.dataset?.removeBook;
@@ -1171,9 +1340,43 @@ $('public-books')?.addEventListener('click', async event => {
     } catch (error) { $('public-message').textContent = localError(error.message, 'public.removeFail'); }
     return;
   }
-  const id = event.target.dataset?.bookId;
-  if (!id || !/^[0-9a-f]{32}$/.test(id)) return;
-  globalThis.history?.replaceState(null, '', `#book-${id}`); openPublicBook(id);
+  openShelfBook(event);
+});
+// A cover that cannot be shown leaves the drawn one underneath.
+$('public-books')?.addEventListener('error', event => { if (event.target?.tagName === 'IMG') event.target.remove(); }, true);
+$('public-detail')?.addEventListener('error', event => { if (event.target?.tagName === 'IMG') event.target.remove(); }, true);
+$('public-ranking')?.addEventListener('click', openShelfBook);
+$('public-comments')?.addEventListener('click', openShelfBook);
+$('public-search')?.addEventListener('input', renderShelf);
+$('public-sort')?.addEventListener('change', renderShelf);
+$('public-filters')?.addEventListener('click', event => {
+  const button = event.target.closest?.('[data-category]'); if (!button) return;
+  shelfCategory = button.dataset.category; renderFilters(); renderShelf();
+});
+$('public-share')?.addEventListener('click', () => {
+  const form = $('public-share-form'), select = $('public-share-lesson'); if (!form || !select) return;
+  form.hidden = !form.hidden; if (form.hidden) return;
+  select.innerHTML = lessons.map((item, index) => item.notebook ? '' : `<option value="${index}">${escapeHtml(item.title)}</option>`).join('');
+  select.value = String(lessons.findIndex(item => item.custom && item === lesson()) >= 0 ? lessonSelect.value : lessons.findLastIndex(item => item.custom) >= 0 ? lessons.findLastIndex(item => item.custom) : lessonSelect.value);
+  if ($('public-share-message')) $('public-share-message').textContent = '';
+  select.focus?.();
+});
+$('public-share-cancel')?.addEventListener('click', () => { $('public-share-form').hidden = true; });
+$('public-share-form')?.addEventListener('submit', async event => {
+  event.preventDefault();
+  const item = lessons[Number($('public-share-lesson').value)], message = $('public-share-message'), file = $('public-share-cover')?.files?.[0];
+  if (!item) return;
+  if (file && file.size > 2_000_000) { message.textContent = t('public.coverBig'); return; }
+  const button = event.target.querySelector?.('[type=submit]'); if (button) button.disabled = true;
+  try {
+    const { data, canUnpublish } = await publishLesson(item);
+    let note = t(canUnpublish ? 'public.shared' : 'notice.keyFail', { key:data.ownerKey });
+    if (file) { try { await uploadCover(data.id, file); } catch (error) { note += ` ${localError(error.message, 'public.coverFail')}`; } }
+    $('public-share-form').hidden = true; if ($('public-share-cover')) $('public-share-cover').value = '';
+    await loadPublicBooks();
+    $('public-message').textContent = note;
+  } catch (error) { message.textContent = t('hint.publishFail', { error:localError(error.message, 'public.loadFail') }); }
+  finally { if (button) button.disabled = false; }
 });
 function readOwnerKeys() {
   try { const value = JSON.parse(storage?.getItem('lingtype-published-keys') || '{}'); return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; } catch { return {}; }

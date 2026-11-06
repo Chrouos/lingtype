@@ -8,6 +8,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-11-02-community-library-design.md`
 
+進度（2026-11-06）：1、2、4 已完成，另加閱讀數與完成率；3（Google 登入）依需求先跳過；5 已用 `test/community-browser.mjs` 驗證桌機與手機流程，部署設定說明尚未寫。
+
 1. 以測試先行新增互動資料表、按讚與留言 API，限制輸入並保留舊資料。
 2. 加入封面驗證和存取、文章練習紀錄與排行，測試遷移及錯誤輸入。
 3. 加入 Google OAuth、session 與跨裝置資料同步；環境沒有憑證時明確顯示未設定。

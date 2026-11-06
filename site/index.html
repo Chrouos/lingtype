@@ -19,7 +19,7 @@
       <button id="nav-practice" type="button" aria-current="page" data-i18n="nav.practice">練習</button>
       <button id="nav-import" type="button" data-i18n="nav.import">匯入</button>
       <button id="nav-notebook" type="button" data-i18n="nav.notebook">單字本</button>
-      <button id="nav-public" type="button" data-i18n="nav.public">公開</button>
+      <button id="nav-public" type="button" data-i18n="nav.public">書房</button>
       <button id="nav-history" type="button" data-i18n="nav.history">紀錄</button>
     </nav>
     <label class="lang"><span class="sr-only" data-i18n="language">語言</span><select id="language"><option value="zh">繁體中文</option><option value="ja">日本語</option><option value="ko">한국어</option></select></label>
@@ -153,11 +153,33 @@
     <ul id="notebook-list" class="notebook-list"></ul>
   </section>
 
-  <section id="view-public" class="view narrow" hidden aria-labelledby="public-heading">
-    <h1 id="public-heading" data-i18n="public.title">公開練習冊</h1>
-    <div id="public-detail" class="card public-detail" hidden></div>
-    <p id="public-message" class="message" role="status"></p>
-    <ul id="public-books" class="rows"></ul>
+  <section id="view-public" class="view" hidden aria-labelledby="public-heading">
+    <div class="shelf-head">
+      <div><h1 id="public-heading" data-i18n="public.title">社群書房</h1><p class="muted" data-i18n="public.lead">挑一篇大家分享的文章，用打字的節奏慢慢讀完。</p></div>
+      <button id="public-share" class="btn primary" type="button" data-i18n="public.share">分享文章</button>
+    </div>
+    <form id="public-share-form" class="card share-form" hidden>
+      <label class="field"><span data-i18n="public.shareLesson">要分享的教材</span><select id="public-share-lesson"></select></label>
+      <label class="field"><span data-i18n="public.shareCover">封面圖片（選填）</span><input id="public-share-cover" type="file" accept="image/png,image/jpeg,image/webp"></label>
+      <p class="muted small" data-i18n="public.shareNote">分享後所有人都能閱讀與練習，請確認你有權公開這篇文章和圖片。</p>
+      <div class="form-foot"><button class="btn primary" type="submit" data-i18n="public.shareSubmit">公開分享</button><button id="public-share-cancel" class="btn" type="button" data-i18n="public.shareCancel">取消</button><span id="public-share-message" class="message" role="status"></span></div>
+    </form>
+    <div id="public-detail" class="public-detail" hidden></div>
+    <div id="public-shelf" class="shelf">
+      <div class="shelf-main">
+        <div class="shelf-tools">
+          <input id="public-search" type="search" data-i18n-placeholder="public.search" data-i18n-aria="public.search" placeholder="搜尋標題或內容">
+          <label class="chip-select"><span class="sr-only" data-i18n="public.sort">排序</span><select id="public-sort"><option value="likes" data-i18n="public.sort.likes">最多人喜歡</option><option value="reads" data-i18n="public.sort.reads">最多人閱讀</option><option value="completion" data-i18n="public.sort.completion">完成率最高</option><option value="new" data-i18n="public.sort.new">最新分享</option></select></label>
+        </div>
+        <div id="public-filters" class="shelf-filters" role="group" data-i18n-aria="public.category"></div>
+        <p id="public-message" class="message" role="status"></p>
+        <ul id="public-books" class="books"></ul>
+      </div>
+      <aside class="shelf-rail">
+        <section><h2 data-i18n="public.ranking">打字排行</h2><ol id="public-ranking" class="rank-list"></ol></section>
+        <section><h2 data-i18n="public.recent">最近留言</h2><ul id="public-comments" class="activity-list"></ul></section>
+      </aside>
+    </div>
     <details class="panel">
       <summary data-i18n="public.unpublish">用下架碼下架</summary>
       <form id="unpublish-form" class="form inline-form">

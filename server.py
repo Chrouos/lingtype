@@ -90,7 +90,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         path = urlsplit(self.path).path
-        community = re.fullmatch(r'/api/workbooks/([0-9a-f]{32})/community/(like|comments|attempts)', path)
+        community = re.fullmatch(r'/api/workbooks/([0-9a-f]{32})/community/(like|comments|attempts|read|start)', path)
         cover = re.fullmatch(r'/api/workbooks/([0-9a-f]{32})/cover', path)
         if path not in ('/api/translate', '/api/workbooks', '/api/extract') and not community and not cover:
             self.send_error(404)
@@ -122,8 +122,9 @@ class Handler(SimpleHTTPRequestHandler):
                 identifier, action = community.groups()
                 if action == 'like': self.send_json({'likes':self.server.library.set_like(identifier, payload.get('visitor'), payload.get('liked'))})
                 elif action == 'comments': self.send_json({'id':self.server.library.add_comment(identifier, payload.get('author', ''), payload.get('text'))}, 201)
+                elif action in ('read', 'start'): self.send_json({'count':self.server.library.record_visit(identifier, payload.get('visitor'), action + 's')})
                 else:
-                    self.server.library.record_attempt(identifier, payload.get('author', ''), payload.get('wpm'), payload.get('accuracy'))
+                    self.server.library.record_attempt(identifier, payload.get('author', ''), payload.get('wpm'), payload.get('accuracy'), payload.get('visitor', ''))
                     self.send_json({'saved':True}, 201)
                 return
             if path == '/api/workbooks':
@@ -187,7 +188,7 @@ class Handler(SimpleHTTPRequestHandler):
             except sqlite3.Error: self.send_json({'error':'無法讀取社群資料。'}, 500)
             return
         if request.path == '/api/workbooks':
-            try: self.send_json({'books':self.server.library.list_books()})
+            try: self.send_json(self.server.library.shelf())
             except sqlite3.Error: self.send_json({'error':'無法讀取公開練習冊。'}, 500)
             return
         match = re.fullmatch(r'/api/workbooks/([0-9a-f]{32})', request.path)
