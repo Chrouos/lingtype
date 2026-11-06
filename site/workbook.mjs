@@ -46,8 +46,11 @@ export function readWorkbook(json) {
       const entries = source.sentenceTranslations[language];
       if (entries === undefined) continue;
       if (!entries || typeof entries !== 'object' || Array.isArray(entries)) throw new Error('練習冊翻譯格式無效。');
-      for (const [sentence, value] of Object.entries(entries)) {
-        if (!sentences.has(sentence) || typeof value !== 'string' || value.length > 100_000) throw new Error('練習冊翻譯格式無效。');
+      for (const [key, value] of Object.entries(entries)) {
+        if (typeof value !== 'string' || value.length > 100_000) throw new Error('練習冊翻譯格式無效。');
+        // Workbooks from earlier versions may key sentences with characters that are now turned into keyboard ones.
+        const sentence = typeable(key).trim();
+        if (!sentences.has(sentence)) continue;
         (sentenceTranslations[language] ??= {})[sentence] = value;
       }
     }

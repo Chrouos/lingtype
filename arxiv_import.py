@@ -105,8 +105,15 @@ class ArticleParser(HTMLParser):
             if tag == 'object' and attrs.get('data'): self.add_image(attrs['data'])
             elif tag == 'figcaption' and not self.frame('caption'): self.open('caption', parts=[])
             elif (tag == 'tr' or 'ltx_tr' in classes) and not self.frame('caption') and not self.frame('cell'): figure['rows'].append([])
-            elif (tag in ('td', 'th') or 'ltx_td' in classes) and figure['rows'] and not self.frame('caption') and not self.frame('cell'): self.open('cell', parts=[])
+            elif (tag in ('td', 'th') or 'ltx_td' in classes) and figure['rows'] and not self.frame('caption') and not self.frame('cell'):
+                spans = [int(c[12:]) for c in classes if c.startswith('ltx_colspan_') and c[12:].isdigit()]
+                span = int(attrs['colspan']) if (attrs.get('colspan') or '').isdigit() else spans[0] if spans else 1
+                self.open('cell', parts=[], span=max(1, min(span, 30)))
             return
+        if tag == 'table' or 'ltx_listing' in classes:
+            self.lead = ''
+        if 'ltx_listing' in classes:
+            return self.open('skip')
         if tag == 'table':
             return self.open('equation', tokens=[]) if classes & {'ltx_equation', 'ltx_equationgroup'} and not self.frame('equation') else self.open('skip')
         if self.frame('equation') or self.sink():
@@ -186,7 +193,9 @@ class ArticleParser(HTMLParser):
             if figure and (not figure['caption'] or (CAPTION_LABEL.match(text) and not CAPTION_LABEL.match(figure['caption']))): figure['caption'] = text
         elif kind == 'cell':
             figure = self.frame('figure')
-            if figure and figure['rows'] and len(figure['rows'][-1]) < 30: figure['rows'][-1].append(text[:300])
+            if figure and figure['rows'] and len(figure['rows'][-1]) < 30:
+                figure['rows'][-1].extend([text[:300]] + [''] * (frame.get('span', 1) - 1))
+                del figure['rows'][-1][30:]
 
     def close_math(self, frame):
         tree = frame['tree']
@@ -218,6 +227,7 @@ class ArticleParser(HTMLParser):
                              'at': frame['at']})
 
     def start_section(self, title):
+        self.lead = ''
         self.current = {'title': title, 'paragraphs': []}
         self.sections.append(self.current)
 

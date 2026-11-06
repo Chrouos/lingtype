@@ -112,7 +112,7 @@ function persistWords(item) {
   if (item.notebook) { notebook = notebook.map(entry => { const found = item.words.find(word => word[0] === entry.word); return found ? { ...entry, translations:{ ...entry.translations, ...Object.fromEntries(['zh', 'ja', 'ko'].map((code, i) => [code, found[i + 1] || entry.translations[code] || ''])) } } : entry; }); return saveNotebook(storage, notebook); }
   return item.custom ? persistLibrary() : saveBuiltinWords(storage, item.id, item.words);
 }
-database?.keys?.('pdf:').then(keys => { const kept = new Set(lessons.filter(item => item.custom).map(item => pdfKey(item.id))); for (const key of keys) if (!kept.has(key)) database.remove(key).catch(() => {}); }, () => {});
+if (editorLock.protected) database?.keys?.('pdf:').then(keys => { const kept = new Set(lessons.filter(item => item.custom).map(item => pdfKey(item.id))); for (const key of keys) if (!kept.has(key)) database.remove(key).catch(() => {}); }, () => {});
 let notebook = readNotebook(storage);
 const translatable = item => item.custom || item.notebook;
 function syncNotebookLesson() {

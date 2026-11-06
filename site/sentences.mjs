@@ -101,7 +101,7 @@ export function passageTranslations(full, passage, text, language) {
 // Typographic marks that a keyboard cannot type become their keyboard equivalents.
 const KEYBOARD = [[/[\u2018\u2019\u201a\u201b\u2032]/g, "'"], [/[\u201c\u201d\u201e\u201f\u2033]/g, '"'], [/[\u2012\u2013\u2014\u2015\u2212]/g, '-'], [/\u2026/g, '...'], [/[\u00a0\u2007\u202f\u2009\u200a]/g, ' '], [/[\u200b\u200c\u200d\ufeff\u00ad\ufe00-\ufe0f]/g, ''],
   // PDFs often carry math-font letters and ligatures; they become the plain letters they look like.
-  [/[\u{1d400}-\u{1d7ff}\ufb00-\ufb06]/gu, char => char.normalize('NFKC')], [/\u223c/g, '~'], [/\u2022/g, '-'], [/\u2192/g, '->'], [/\u2264/g, '<='], [/\u2265/g, '>=']];
+  [/[\u{1d400}-\u{1d7ff}\ufb00-\ufb06]/gu, char => char.normalize('NFKC')], [/\u223c/g, '~'], [/\u2022\s*/g, ''], [/\u00d7/g, 'x'], [/\u2192/g, '->'], [/\u2264/g, '<='], [/\u2265/g, '>=']];
 export function typeable(text) {
   return KEYBOARD.reduce((value, [pattern, plain]) => value.replace(pattern, plain), text);
 }

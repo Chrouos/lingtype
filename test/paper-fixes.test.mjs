@@ -3,9 +3,16 @@ import assert from 'node:assert/strict';
 import { typeable } from '../site/sentences.mjs';
 import { safeImage, figureHtml } from '../site/paper.mjs';
 import { readCustomLessons } from '../site/library.mjs';
+import { readWorkbook } from '../site/workbook.mjs';
 
 test('characters a PDF uses for math letters, ligatures and arrows become keyboard characters', () => {
-  assert.equal(typeable('Figure 2︀ \u{1D440}\u{1D44A} ﬁne ∼3 • a→b ≤ ≥'), 'Figure 2 MW fine ~3 - a->b <= >=');
+  assert.equal(typeable('Figure 2︀ \u{1D440}\u{1D44A} ﬁne ∼3 • a→b ≤ ≥ 3.6×'), 'Figure 2 MW fine ~3 a->b <= >= 3.6x');
+});
+
+test('a workbook saved before those characters were converted still opens with its translations', () => {
+  const file = { format:'lingtype-workbook', version:1, lesson:{ title:'Old', text:'Costs ∼5 more. Done here.', words:[], translations:{}, sentenceTranslations:{ zh:{ 'Costs ∼5 more.':'成本多 5 倍。', 'Gone sentence.':'x' } } } };
+  const lesson = readWorkbook(JSON.stringify(file));
+  assert.deepEqual(lesson.sentenceTranslations, { zh:{ 'Costs ~5 more.':'成本多 5 倍。' } });
 });
 
 test('only plain arXiv HTML image addresses are used', () => {

@@ -88,6 +88,19 @@ class ArxivTests(unittest.TestCase):
         self.assertEqual((table['label'], table['caption'], table['images']), ('Table 2', 'Results.', []))
         self.assertEqual(table['rows'], [['', 'Accuracy'], ['SAC', '70.2']])
 
+    def test_a_heading_without_its_paragraph_stays_out_and_spans_keep_columns(self):
+        html = r'''<html><body><article><section><h2 class="ltx_title_section">G.1 One</h2>
+        <div class="ltx_para"><p class="ltx_p">First text.</p></div>
+        <section class="ltx_paragraph"><h5 class="ltx_title ltx_title_paragraph">Compaction prompt</h5>
+        <div class="ltx_listing"><div class="ltx_listingline">code here</div></div></section></section>
+        <section><h2 class="ltx_title_section">G.2 Two</h2><div class="ltx_para"><p class="ltx_p">As described.</p></div>
+        <figure class="ltx_table"><span class="ltx_tabular"><span class="ltx_tr"><span class="ltx_td ltx_colspan ltx_colspan_2">Accuracy</span><span class="ltx_td">Cost</span></span>
+        <span class="ltx_tr"><span class="ltx_td">1</span><span class="ltx_td">2</span><span class="ltx_td">3</span></span></span>
+        <figcaption>Table 1: T.</figcaption></figure></section></article></body></html>'''
+        paper = parse_article(html, 'https://arxiv.org/html/2611.05306')
+        self.assertEqual([s['text'] for s in paper['sections']], ['First text.', 'As described.'])
+        self.assertEqual(paper['figures'][0]['rows'], [['Accuracy', '', 'Cost'], ['1', '2', '3']])
+
     def test_server_rejects_non_arxiv_urls(self):
         server = ThreadingHTTPServer(('127.0.0.1', 0), partial(Handler, directory='site'))
         thread = threading.Thread(target=server.serve_forever, daemon=True)
