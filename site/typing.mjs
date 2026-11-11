@@ -4,6 +4,12 @@ export function wordEdit(word, value) {
   return { input: value, error: false, complete: value === word };
 }
 
+// When timer callbacks are delayed (for example in a background tab), do not
+// charge the idle interval to the typist.
+export function activeTypingEnd(lastKeyAt, now, idleMs) {
+  return now - lastKeyAt > idleMs ? lastKeyAt : now;
+}
+
 export function articleResult(target, input, elapsed, ignored = new Set()) {
   let correct = 0, total = 0;
   for (let i = 0; i < target.length; i++) if (!ignored.has(i)) { total++; if (target[i] === input[i]) correct++; }

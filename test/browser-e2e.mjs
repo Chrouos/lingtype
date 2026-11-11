@@ -2,9 +2,10 @@
 import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { Browser } from '../.agents/skills/design-taste-frontend/scripts/lib/cdp.mjs';
+import { Browser } from './helpers/browser.mjs';
 
-const base = process.env.LINGTYPE_URL || 'http://127.0.0.1:8765/';
+// The reader opens at #practice; the home page is the library.
+const base = new URL('#practice', process.env.LINGTYPE_URL || 'http://127.0.0.1:8765/').href;
 const out = process.argv[2] || '.taste-skill/e2e';
 mkdirSync(out, { recursive:true });
 const browser = await Browser.launch();
@@ -27,7 +28,7 @@ try {
   assert.equal(await page.eval(`document.getElementById('lesson-chooser').hidden`), false);
   await page.eval(`document.getElementById('preview-start').click()`);
   assert.equal(await page.eval('document.documentElement.lang'), 'zh-Hant');
-  assert.equal(await text('nav-import'), '匯入');
+  assert.equal(await text('nav-shelf'), '我的書櫃');
   assert.equal(await page.eval(`getComputedStyle(document.body).fontFamily.includes('Geist')`), true);
 
   // Only the current sentence and its translation appear.
@@ -56,7 +57,7 @@ try {
   await expectLook({ veil:'1', bar:'1', head:'1', text:'0.55' });
   await shot('desktop-unfocused');
   // A printable key typed while a button has focus goes into the card.
-  await page.eval(`document.getElementById('nav-practice').focus()`);
+  await page.eval(`document.getElementById('nav-shelf').focus()`);
   await page.send('Input.dispatchKeyEvent', { type:'keyDown', key:'T', text:'T', code:'KeyT', windowsVirtualKeyCode:84 });
   await page.send('Input.dispatchKeyEvent', { type:'keyUp', key:'T', code:'KeyT', windowsVirtualKeyCode:84 });
   assert.equal(await page.eval(`document.activeElement.id`), 'typing');
@@ -79,6 +80,10 @@ try {
   assert.equal(await page.eval(`document.getElementById('result').hidden`), false);
   assert.match(await text('result'), /完成/);
   await page.eval(`document.getElementById('next-action').click()`);
+  // The end of a book returns to its page; the next book is chosen on the shelf.
+  assert.equal(await page.eval(`document.getElementById('lesson-chooser').hidden`), false);
+  assert.equal(await text('preview-start'), '再讀一次');
+  await page.eval(`(() => { document.getElementById('nav-shelf').click(); [...document.querySelectorAll('#shelf-books .book')].find(node => node.textContent === 'A small garden').click(); document.getElementById('preview-start').click(); })()`);
   assert.equal(await page.eval(`document.getElementById('lesson').selectedOptions[0].textContent`), 'A small garden');
   assert.equal(await page.eval(`document.activeElement.id`), 'typing');
   await type('Every weekend, Noah');
@@ -127,14 +132,14 @@ try {
   // Switching language changes the interface, the stopped result and the history in place.
   await setLanguage('ja');
   assert.equal(await page.eval('document.documentElement.lang'), 'ja');
-  assert.equal(await text('nav-import'), '追加');
+  assert.equal(await text('nav-shelf'), 'マイ本棚');
   assert.equal(await text('history-heading'), '練習記録');
   assert.match(await text('history-list'), /文章/);
-  await page.eval(`document.getElementById('nav-practice').click()`);
+  await page.eval(`(location.hash = 'practice')`);
   assert.match(await text('result'), /中断しました/);
   await shot('desktop-result-ja');
   await setLanguage('ko');
-  assert.equal(await text('nav-import'), '가져오기');
+  assert.equal(await text('nav-shelf'), '내 책장');
   assert.match(await text('result'), /중단됨/);
   // Enter continues where the session stopped.
   await page.eval(`document.activeElement.blur()`);
@@ -172,6 +177,8 @@ try {
   await page.eval(`document.getElementById('nav-notebook').click()`);
   await page.eval(`document.getElementById('notebook-sentences').click()`);
   assert.equal(await page.eval(`document.getElementById('article-mode').classList.contains('active')`), true);
+  assert.equal(await page.eval(`document.getElementById('article-mode').getAttribute('aria-pressed')`), 'true');
+  assert.equal(await page.eval(`document.getElementById('word-mode').getAttribute('aria-pressed')`), 'false');
   assert.match(await text('article-text'), /^Every weekend, Noah tends a small garden behind his home\./);
 
   // The clock holds while focus is away from the text, and after six seconds without typing.
@@ -193,6 +200,8 @@ try {
 
   // Word mode: a wrong letter resets the word and shows a localized note.
   await page.eval(`document.getElementById('word-mode').click()`);
+  assert.equal(await page.eval(`document.getElementById('article-mode').getAttribute('aria-pressed')`), 'false');
+  assert.equal(await page.eval(`document.getElementById('word-mode').getAttribute('aria-pressed')`), 'true');
   await click('#word-text');
   await type('gx');
   assert.equal(await page.eval(`document.getElementById('typing').value`), '');
@@ -205,7 +214,7 @@ try {
 
   // Import a pasted text in Chinese UI; practice starts on it with the word picker.
   await setLanguage('zh');
-  await page.eval(`(() => { window.confirm = () => true; document.getElementById('nav-import').click(); })()`);
+  await page.eval(`(() => { window.confirm = () => true; document.getElementById('shelf-import').click(); })()`);
   await shot('desktop-import-zh');
   // One page holds every way in: a link, a file, or pasted text.
   assert.equal(await page.eval(`['arxiv-url', 'dropzone', 'import-text'].every(id => document.getElementById(id).getBoundingClientRect().height > 0)`), true);
@@ -218,6 +227,21 @@ try {
   assert.equal(await page.eval(`document.getElementById('word-picker').hidden`), false);
   assert.equal(await page.eval(`document.getElementById('lesson-vocab').hidden`), true);
   await page.eval(`document.getElementById('word-picker').open = true`);
+  // Selecting and deselecting a candidate must not lose keyboard focus when the list redraws.
+  await page.eval(`document.querySelector('#word-candidates input').focus()`);
+  for (let i = 0; i < 2; i++) {
+    for (const type of ['keyDown', 'keyUp']) await page.send('Input.dispatchKeyEvent', { type, key:' ', code:'Space', windowsVirtualKeyCode:32 });
+    assert.equal(await page.eval(`document.activeElement.matches('#word-candidates input')`), true);
+    assert.equal(await page.eval(`document.activeElement.checked`), i === 0);
+  }
+  await page.eval(`document.querySelector('#word-candidates .known-word').focus()`);
+  for (const type of ['keyDown', 'keyUp']) await page.send('Input.dispatchKeyEvent', { type, key:'Enter', code:'Enter', windowsVirtualKeyCode:13, ...(type === 'keyDown' ? { text:'\r' } : {}) });
+  assert.equal(await page.eval(`document.activeElement.matches('#word-candidates .known-word')`), true);
+  await page.eval(`document.querySelector('#word-candidates input').focus()`);
+  for (const type of ['keyDown', 'keyUp']) await page.send('Input.dispatchKeyEvent', { type, key:' ', code:'Space', windowsVirtualKeyCode:32 });
+  await page.eval(`document.querySelector('#selected-words [data-remove-word]').focus()`);
+  for (const type of ['keyDown', 'keyUp']) await page.send('Input.dispatchKeyEvent', { type, key:'Enter', code:'Enter', windowsVirtualKeyCode:13, ...(type === 'keyDown' ? { text:'\r' } : {}) });
+  assert.equal(await page.eval(`document.activeElement.id`), 'word-search');
   for (let i = 0; i < 160 && await text('hint') === '正在準備翻譯…'; i++) await pause(250);
   // Either a real translation appears, or the page says plainly that none is available.
   const shown = await page.eval(`document.querySelector('#article-text .tr')?.textContent || ''`);
@@ -230,7 +254,7 @@ try {
   await shot('desktop-imported-zh');
 
   // A long text advances one sentence at a time and the page follows the caret.
-  await page.eval(`(() => { document.getElementById('nav-import').click(); document.getElementById('import-title').value = 'Long text'; document.getElementById('import-text').value = Array.from({length:30}, (_, i) => 'Sentence number ' + (i + 1) + ' is here.').join(' '); document.getElementById('import-form').requestSubmit(); })()`);
+  await page.eval(`(() => { document.getElementById('shelf-import').click(); document.getElementById('import-title').value = 'Long text'; document.getElementById('import-text').value = Array.from({length:30}, (_, i) => 'Sentence number ' + (i + 1) + ' is here.').join(' '); document.getElementById('import-form').requestSubmit(); })()`);
   await pause(300);
   await page.eval(`document.getElementById('preview-start').click()`);
   assert.match(await text('article-text'), /Sentence number 1 is here\./);
@@ -266,14 +290,14 @@ try {
 
   // Files: a long text is split into parts and only the first part is drawn; subtitles become prose.
   const upload = async path => {
-    await page.eval(`(() => { window.confirm = () => true; document.getElementById('nav-import').click(); })()`);
+    await page.eval(`(() => { window.confirm = () => true; document.getElementById('shelf-import').click(); })()`);
     const { root } = await page.send('DOM.getDocument', { depth:1 });
     const { nodeId } = await page.send('DOM.querySelector', { nodeId:root.nodeId, selector:'#document-file' });
     await page.send('DOM.setFileInputFiles', { nodeId, files:[resolve(path)] });
     for (let i = 0; i < 40 && await page.eval(`document.getElementById('view-practice').hidden`); i++) await pause(250);
     await page.eval(`document.getElementById('preview-start').click()`);
   };
-  await page.eval(`(() => { window.confirm = () => true; document.getElementById('nav-import').click(); })()`);
+  await page.eval(`(() => { window.confirm = () => true; document.getElementById('shelf-import').click(); })()`);
   await shot('desktop-import-page');
   const story = Array.from({ length:120 }, (_, i) => `Paragraph ${i + 1} begins here. It carries a few calm sentences about the sea, the harbour and the boats that come home before the evening light fades away.`).join('\n\n');
   writeFileSync(`${out}/long story.txt`, story);
@@ -294,7 +318,7 @@ try {
 
   // A YouTube link brings its English subtitles, titled after the video, with a link back to it.
   if (process.env.LINGTYPE_SKIP_NETWORK !== '1') {
-    await page.eval(`(() => { document.getElementById('nav-import').click(); document.getElementById('arxiv-url').value = 'https://www.youtube.com/watch?v=arj7oStGLkU'; document.getElementById('arxiv-form').requestSubmit(); })()`);
+    await page.eval(`(() => { document.getElementById('shelf-import').click(); document.getElementById('arxiv-url').value = 'https://www.youtube.com/watch?v=arj7oStGLkU'; document.getElementById('arxiv-form').requestSubmit(); })()`);
     for (let i = 0; i < 120 && await page.eval(`document.getElementById('view-practice').hidden`); i++) await pause(250);
     await page.eval(`document.getElementById('preview-start').click()`);
     const title = await page.eval(`document.getElementById('lesson').selectedOptions[0].textContent`);

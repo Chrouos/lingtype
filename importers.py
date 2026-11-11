@@ -5,15 +5,28 @@ import posixpath
 import re
 import socket
 import zipfile
+from html import unescape
 from html.parser import HTMLParser
-from urllib.parse import parse_qs, urljoin, urlsplit
+from urllib.parse import parse_qs, unquote, urljoin, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 from xml.etree import ElementTree
 
 MAX_TEXT = 1_000_000
 MAX_UNZIPPED = 50_000_000
 MAX_PAGE = 5_000_000
+MAX_PDF_PAGES = 2000
+
+
+class PdfPageLimitError(ValueError):
+    pass
+
+
+class EpubSpineError(ValueError):
+    pass
+
+
 SKIPPED_TAGS = {'script', 'style', 'noscript', 'nav', 'header', 'footer', 'aside', 'form', 'svg', 'figure', 'button', 'template', 'iframe', 'select'}
+EPUB_SKIPPED_TAGS = {'script', 'style', 'noscript', 'nav', 'form', 'button', 'template', 'iframe', 'select'}
 # Citation marks such as [1] or [citation needed] are not prose, and nothing after "References" is either.
 CITATION = re.compile(r'\[\s*(?:\d+|[a-z]|[a-z]? ?\d+|[^\]]*needed|note[^\]]*|edit)\s*\]', re.IGNORECASE)
 END_HEADINGS = {'see also', 'references', 'notes', 'external links', 'bibliography', 'further reading', 'sources', 'footnotes', 'citations', 'notes and references'}
@@ -37,8 +50,12 @@ def checked(result):
 class ReadableParser(HTMLParser):
     """Collects the paragraphs of a page, preferring its <article> or <main> over menus and footers."""
 
-    def __init__(self):
+    def __init__(self, preserve_book_text=False):
         super().__init__(convert_charrefs=True)
+        self.preserve_book_text = preserve_book_text
+        self.skipped_tags = EPUB_SKIPPED_TAGS if preserve_book_text else SKIPPED_TAGS
+        self.in_body = False
+        self.loose = []
         self.skip = 0
         self.depth = {'article': 0, 'main': 0}
         self.block = None
@@ -50,11 +67,15 @@ class ReadableParser(HTMLParser):
 
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
+        if tag in BLOCK_TAGS or tag in ('body', 'div', 'section', 'article', 'main', 'header', 'footer', 'aside', 'figure', 'br') or tag in self.skipped_tags:
+            self.flush_loose()
+        if tag == 'body':
+            self.in_body = True
         if tag == 'meta' and attrs.get('property') == 'og:title':
             self.meta_title = attrs.get('content') or ''
         if tag == 'title':
             self.in_title = True
-        if tag in SKIPPED_TAGS:
+        if tag in self.skipped_tags:
             self.skip += 1
         if tag in self.depth:
             self.depth[tag] += 1
@@ -65,20 +86,36 @@ class ReadableParser(HTMLParser):
             self.block[1].append(' ')
 
     def handle_endtag(self, tag):
+        if tag in ('body', 'div', 'section', 'article', 'main', 'header', 'footer', 'aside', 'figure'):
+            self.flush_loose()
         if tag == 'title':
             self.in_title = False
         if tag in BLOCK_TAGS:
             self.flush()
-        if tag in SKIPPED_TAGS and self.skip:
+        if tag in self.skipped_tags and self.skip:
             self.skip -= 1
         if tag in self.depth and self.depth[tag]:
             self.depth[tag] -= 1
+        if tag == 'body':
+            self.in_body = False
 
     def handle_data(self, data):
         if self.in_title:
             self.title += data
         elif self.block and not self.skip:
             self.block[1].append(data)
+        elif (self.in_body or (not self.preserve_book_text and any(self.depth.values()))) and not self.skip:
+            self.loose.append(data)
+
+    def flush_loose(self):
+        text = re.sub(r'\s+', ' ', ''.join(self.loose)).strip()
+        self.loose.clear()
+        if not text:
+            return
+        for scope in ('article', 'main'):
+            if self.depth[scope]:
+                self.parts[scope].append(text)
+        self.parts['body'].append(text)
 
     def flush(self):
         if not self.block:
@@ -95,34 +132,60 @@ class ReadableParser(HTMLParser):
                 self.parts[scope].append(text)
         self.parts['body'].append(text)
 
-    def result(self):
+    def result(self, *, preserve_book_text=False):
         self.flush()
-        # A page's own article wins when it holds most of the prose; otherwise use every paragraph.
-        body_size = sum(len(part) for part in self.parts['body'])
-        for scope in ('article', 'main'):
-            if sum(len(part) for part in self.parts[scope]) >= max(400, body_size * 0.3):
-                paragraphs = self.parts[scope]
-                break
-        else:
-            paragraphs = self.parts['body']
-        for index, part in enumerate(paragraphs):
-            if part in self.headings and part.lower().strip(' :') in END_HEADINGS:
-                paragraphs = paragraphs[:index]
-                break
-        paragraphs = [CITATION.sub('', part).strip() for part in paragraphs if len(part.split()) >= 4 or part in self.headings]
+        self.flush_loose()
+        # EPUB spine documents are already selected in reading order; prose
+        # outside an inner article/main is still part of that book page.
+        paragraphs = self.parts['body']
+        selected_scope = False
+        if not preserve_book_text:
+            # For general web pages, prefer a substantial article over menus.
+            body_size = sum(len(part) for part in paragraphs)
+            for scope in ('article', 'main'):
+                scope_size = sum(len(part) for part in self.parts[scope])
+                if scope_size and scope_size >= body_size * 0.3:
+                    paragraphs = self.parts[scope]
+                    selected_scope = True
+                    break
+        if not preserve_book_text:
+            for index, part in enumerate(paragraphs):
+                if part in self.headings and part.lower().strip(' :') in END_HEADINGS:
+                    paragraphs = paragraphs[:index]
+                    break
+            # Short dialogue and captions inside an explicit article are prose,
+            # even when they contain fewer than four words.
+            paragraphs = [CITATION.sub('', part).strip() for part in paragraphs if selected_scope or len(part.split()) >= 4 or part in self.headings]
         title = (self.meta_title or self.title or (self.headings[0] if self.headings else '')).strip()
         return {'title': re.sub(r'\s+', ' ', title)[:100], 'text': tidy('\n\n'.join(paragraphs))}
 
 
-def html_to_text(html):
-    parser = ReadableParser()
+def html_to_text(html, *, preserve_book_text=False):
+    parser = ReadableParser(preserve_book_text=preserve_book_text)
     parser.feed(html)
     parser.close()
-    return parser.result()
+    return parser.result(preserve_book_text=preserve_book_text)
 
 
 def decode(data):
-    for encoding in ('utf-8-sig', 'utf-16'):
+    # An arbitrary even-length byte stream can decode as native-endian UTF-16
+    # without raising, producing unrelated characters. Require a byte-order
+    # mark or a strong zero-byte pattern before trying UTF-16.
+    has_bom = data.startswith((b'\xff\xfe', b'\xfe\xff'))
+    encodings = ('utf-16',) if has_bom else ('utf-8-sig', 'cp1252')
+    if not has_bom and len(data) >= 4 and len(data) % 2 == 0:
+        # Common BOM-less UTF-16 English text has zeros on one byte lane.
+        # Require a strong asymmetric signal before attempting to decode it.
+        sample = data[:4096]
+        even, odd = sample[::2], sample[1::2]
+        even_ratio, odd_ratio = even.count(0) / len(even), odd.count(0) / len(odd)
+        encoding = 'utf-16-le' if odd_ratio >= 0.3 and even_ratio <= 0.05 else 'utf-16-be' if even_ratio >= 0.3 and odd_ratio <= 0.05 else None
+        if encoding:
+            try:
+                return data.decode(encoding)
+            except UnicodeDecodeError:
+                pass
+    for encoding in encodings:
         try:
             return data.decode(encoding)
         except UnicodeDecodeError:
@@ -147,11 +210,45 @@ def docx_to_text(data):
     except (KeyError, ElementTree.ParseError) as error:
         raise ValueError('Word 檔案內容無法讀取。') from error
     word = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
-    paragraphs = []
-    for paragraph in root.iter(f'{word}p'):
-        text = ''.join((node.text or '') if node.tag == f'{word}t' else ' ' for node in paragraph.iter() if node.tag in (f'{word}t', f'{word}tab', f'{word}br'))
+    paragraphs, chunks = [], []
+    special = {f'{word}tab': ' ', f'{word}br': ' ', f'{word}cr': ' ', f'{word}noBreakHyphen': '-'}
+    markup = '{http://schemas.openxmlformats.org/markup-compatibility/2006}'
+
+    def flush():
+        text = ''.join(chunks)
+        chunks.clear()
         if text.strip():
             paragraphs.append(text)
+
+    # Text boxes can contain paragraphs nested inside another paragraph. Walk
+    # in document order and flush at each boundary so they are not copied into
+    # the parent and then emitted a second time.
+    stack, depth = [(root, False)], 0
+    while stack:
+        node, closing = stack.pop()
+        if closing:
+            if node.tag == f'{word}p':
+                flush()
+                depth -= 1
+            continue
+        if node.tag == f'{word}p':
+            flush()
+            depth += 1
+        elif depth and node.tag == f'{word}t':
+            chunks.append(node.text or '')
+        elif depth and node.tag in special:
+            chunks.append(special[node.tag])
+        stack.append((node, True))
+        children = list(node)
+        if node.tag == f'{markup}AlternateContent':
+            choices = [child for child in children if child.tag == f'{markup}Choice']
+            fallback = next((child for child in children if child.tag == f'{markup}Fallback'), None)
+            # Choice and Fallback are alternative renderings of the same content.
+            # Prefer a choice containing text, then a fallback when available.
+            selected = next((choice for choice in choices if any((text.text or '').strip() for text in choice.iter(f'{word}t'))), None)
+            selected = selected if selected is not None else fallback if fallback is not None else next(iter(choices), None)
+            children = [selected] if selected is not None else []
+        stack.extend((child, False) for child in reversed(children))
     return {'title': '', 'text': tidy('\n\n'.join(paragraphs))}
 
 
@@ -161,75 +258,124 @@ def epub_to_text(data):
     try:
         container = ElementTree.fromstring(archive.read('META-INF/container.xml'))
         opf_path = next(node.get('full-path') for node in container.iter() if node.tag.endswith('rootfile'))
+        if not isinstance(opf_path, str) or not opf_path:
+            raise ValueError('EPUB 檔案內容無法讀取。')
+        if urlsplit(opf_path).scheme or urlsplit(opf_path).netloc:
+            raise EpubSpineError('EPUB 書籍路徑無效。')
+        opf_path = unquote(opf_path)
+        if re.match(r'^[A-Za-z][A-Za-z0-9+.-]*://', opf_path) or opf_path.startswith('/') or '\\' in opf_path or '\0' in opf_path or posixpath.normpath(opf_path) == '..' or posixpath.normpath(opf_path).startswith('../'):
+            raise EpubSpineError('EPUB 書籍路徑無效。')
         opf = ElementTree.fromstring(archive.read(opf_path))
     except (KeyError, StopIteration, ElementTree.ParseError) as error:
         raise ValueError('EPUB 檔案內容無法讀取。') from error
     base = posixpath.dirname(opf_path)
-    manifest = {node.get('id'): node.get('href') for node in opf.iter() if node.tag.endswith('}item')}
+    manifest = {node.get('id'): node for node in opf.iter() if node.tag.endswith('}item')}
+    def local_path(href):
+        if not isinstance(href, str):
+            return None
+        parsed = urlsplit(href)
+        if parsed.scheme or parsed.netloc or not parsed.path:
+            return None
+        path = unquote(parsed.path)
+        if re.match(r'^[A-Za-z][A-Za-z0-9+.-]*://', path) or path.startswith('/') or '\\' in path or '\0' in path:
+            return None
+        resolved = posixpath.normpath(posixpath.join(base, path))
+        return None if resolved == '..' or resolved.startswith('../') else resolved
+    covers = {path for node in opf.iter() if node.tag.endswith('}reference') and 'cover' in node.get('type', '').lower().split() if (path := local_path(node.get('href')))}
     book_title = next((node.text for node in opf.iter() if node.tag.endswith('}title') and node.text), '')
     sections = []
     for ref in (node.get('idref') for node in opf.iter() if node.tag.endswith('}itemref')):
-        href = manifest.get(ref)
-        if not href:
+        item = manifest.get(ref)
+        if item is None:
+            raise EpubSpineError('EPUB 閱讀順序引用了不存在的章節。')
+        path = local_path(item.get('href'))
+        if 'nav' in (item.get('properties') or '').split():
+            continue
+        if not path:
+            raise EpubSpineError('EPUB 章節路徑無效。')
+        if path in covers:
             continue
         try:
-            page = html_to_text(decode(archive.read(posixpath.normpath(posixpath.join(base, href)))))
-        except KeyError:
-            continue
-        if len(page['text']) < 300:
+            page = html_to_text(decode(archive.read(path)), preserve_book_text=True)
+        except KeyError as error:
+            raise EpubSpineError('EPUB 閱讀順序中的章節檔案不存在。') from error
+        if not page['text'].strip():
             continue
         title = page['title'] if page['title'] and page['title'] != book_title else f'{len(sections) + 1}'
         sections.append({'title': title[:100], 'text': page['text']})
     return {'title': book_title.strip()[:100], 'text': '\n\n'.join(section['text'] for section in sections), 'sections': sections}
 
 
-def without_running_lines(pages):
-    """Drop running headers and footers: a first or last line that recurs on most pages, page numbers aside."""
-    shape = lambda line: re.sub(r'\d+', '#', line.strip().lower())
-    edges = [[line for line in page.split('\n') if line.strip()] for page in pages]
-    needed = max(3, len([lines for lines in edges if lines]) * 0.4)
-    counts, offsets = {}, {}
-    for index, lines in enumerate(edges):
-        for line in {shape(line) for line in lines[:2] + lines[-2:]} - {'#'}:
-            counts[line] = counts.get(line, 0) + 1
-        # A bare number at a page edge is a page number when it keeps the same distance from the page count.
-        for line in {line.strip() for line in lines[:2] + lines[-2:] if line.strip().isdigit()}:
-            offsets[int(line) - index] = offsets.get(int(line) - index, 0) + 1
-    running = {line for line, count in counts.items() if count >= needed and len(line) <= 120}
-    offset = max(offsets, key=offsets.get) if offsets and max(offsets.values()) >= needed else None
-    if not running and offset is None:
-        return pages
+def pdf_page_text(page):
+    """Omit explicitly marked artifacts only when extraction can be aligned exactly.
 
-    def edge(line, index):
-        stripped = line.strip()
-        if stripped.isdigit(): return offset is not None and int(stripped) - index == offset
-        return not stripped or shape(line) in running
+    Repeated lines and sequential numbers alone are not proof of headers or
+    page numbers. Preserve all text when marked-content boundaries are unclear.
+    """
+    stack, chunks = [], []
+    state = {'in_text':False, 'artifact':False, 'operator':None, 'unsafe':False}
 
-    cleaned = []
-    for index, page in enumerate(pages):
-        lines = page.split('\n')
-        for _ in range(4):
-            if lines and edge(lines[0], index): lines = lines[1:]
-        for _ in range(4):
-            if lines and edge(lines[-1], index): lines = lines[:-1]
-        cleaned.append('\n'.join(lines))
-    return cleaned
+    def before(operator, operands, _cm, _tm):
+        state['operator'] = operator
+        if operator in (b'BMC', b'BDC'):
+            if state['in_text'] or len(stack) >= 100:
+                state['unsafe'] = True
+            stack.append((stack[-1] if stack else False) or bool(operands and str(operands[0]) == '/Artifact'))
+        elif operator == b'EMC':
+            if state['in_text'] or not stack:
+                state['unsafe'] = True
+            if stack:
+                stack.pop()
+        elif operator == b'BT':
+            if state['in_text']:
+                state['unsafe'] = True
+            state['in_text'] = True
+            state['artifact'] = bool(stack and stack[-1])
+        elif operator == b'ET' and not state['in_text']:
+            state['unsafe'] = True
+        elif operator == b'Do':
+            # Nested form content can interleave visitor callbacks.
+            state['unsafe'] = True
+
+    def after(operator, _operands, _cm, _tm):
+        if operator == b'ET':
+            state['in_text'] = False
+            state['artifact'] = False
+
+    def visit(text, _cm, _tm, _font, _size):
+        if len(chunks) >= 100000:
+            state['unsafe'] = True
+            return
+        # BT can flush text preceding the current marked-content section.
+        marked = state['in_text'] and state['artifact'] and state['operator'] != b'BT'
+        chunks.append((text, marked))
+
+    text = page.extract_text(visitor_operand_before=before, visitor_operand_after=after, visitor_text=visit) or ''
+    if state['unsafe'] or state['in_text'] or stack or ''.join(part for part, _ in chunks) != text:
+        return text
+    return ''.join(part for part, marked in chunks if not marked)
 
 
 def pdf_to_text(data):
     try:
         from pypdf import PdfReader
         reader = PdfReader(io.BytesIO(data))
-        pages = [page.extract_text() or '' for page in reader.pages[:2000]]
+        if len(reader.pages) > MAX_PDF_PAGES:
+            raise PdfPageLimitError(f'PDF 超過 {MAX_PDF_PAGES} 頁，請先拆分後再匯入。')
+        pages = [pdf_page_text(page) for page in reader.pages]
     except ImportError as error:
         raise RuntimeError('尚未安裝 pypdf，請執行 python -m pip install --target .deps -r requirements.txt。') from error
+    except PdfPageLimitError:
+        raise
     except Exception as error:
         raise ValueError('PDF 內容無法讀取，可能是掃描圖片或受密碼保護。') from error
     # Each page with text becomes a section that remembers its page number, so the reader can show the page beside it.
-    pages = without_running_lines(pages)
     sections = []
     for number, page in enumerate(pages, 1):
-        page = re.sub(r'(\w)-\n(\w)', r'\1\2', page)
+        # A line-ending hyphen may be part of a real compound such as
+        # "well-known". The extracted text alone cannot tell it apart from
+        # discretionary hyphenation, so preserve the original character.
+        page = re.sub(r'(\w)-\n(\w)', r'\1-\2', page)
         # Some paper fonts draw the colon after a figure or table number as an unrelated symbol.
         page = re.sub(r'\b((?:Figure|Fig\.|Table)\s*\d+)\s*\u22c3[\ufe00-\ufe0f]?', r'\1:', page)
         # A line that ends a sentence and is shorter than the page measure usually ends a paragraph.
@@ -245,18 +391,32 @@ def pdf_to_text(data):
             **({'sections': sections} if len(sections) > 1 else {}), **({'pages': [s['page'] for s in sections]} if sections else {})}
 
 
+SUBTITLE_MARKUP = re.compile(r'</?(?:i|b|u|s|font|span|c|v|lang|ruby|rt)(?:\s[^<>]*|\.[^<>]*)?\s*>|<\d{2}:\d{2}(?::\d{2})?\.\d{3}>', re.IGNORECASE)
+
+
 def subtitle_to_text(data):
-    blocks = re.split(r'\n\s*\n', decode(data).replace('\r\n', '\n'))
+    blocks = re.split(r'\n\s*\n', decode(data).replace('\r\n', '\n').replace('\r', '\n'))
     lines = []
+    last_cue = None
+    def seconds(stamp):
+        total = 0
+        for part in stamp.replace(',', '.').split(':'):
+            total = total * 60 + float(part)
+        return total
     for block in blocks:
         rows = block.strip().split('\n')
         timing = next((i for i, row in enumerate(rows) if '-->' in row), None)
         if timing is None:
             continue
-        text = re.sub(r'<[^>]+>', '', ' '.join(rows[timing + 1:])).strip()
-        if text and (not lines or text != lines[-1]):
-            lines.append(text)
-    return {'title': '', 'text': captions_to_text([{'text': line, 'start': i * 3.0, 'duration': 3.0} for i, line in enumerate(lines)])}
+        text = re.sub(r'\s+', ' ', unescape(SUBTITLE_MARKUP.sub('', ' '.join(rows[timing + 1:])))).strip()
+        if text:
+            times = re.match(r'^((?:\d{2}:)?\d{2}:\d{2}[.,]\d{3})\s+-->\s+((?:\d{2}:)?\d{2}:\d{2}[.,]\d{3})', rows[timing].strip())
+            start, end = (seconds(times.group(1)), seconds(times.group(2))) if times else (None, None)
+            cue = (text, start, end)
+            if not times or cue != last_cue:
+                lines.append(text)
+            last_cue = cue if times else None
+    return {'title': '', 'text': captions_to_text([{'text': line, 'start': i * 3.0, 'duration': 3.0} for i, line in enumerate(lines)], preserve_text=True)}
 
 
 def extract_file(name, data):
@@ -343,8 +503,26 @@ def fetch_article(url, opener=None):
         content = response.read(MAX_PAGE + 1)
         if len(content) > MAX_PAGE:
             raise ValueError('網頁超過 5 MB，無法匯入。')
-        charset = response.headers.get_content_charset() or 'utf-8'
-    result = html_to_text(content.decode(charset, errors='replace'))
+        charset = response.headers.get_content_charset()
+    # Many pages omit an HTTP charset but declare one in a meta tag; others
+    # are legacy Windows text with no declaration at all. Avoid silently
+    # replacing every non-UTF-8 byte in those pages.
+    if not charset:
+        for meta in re.findall(br'<meta\b[^>]*>', content[:4096], re.IGNORECASE):
+            match = re.search(br'\bcharset\s*=\s*["\']?\s*([\w.-]+)', meta, re.IGNORECASE)
+            if match:
+                charset = match.group(1).decode('ascii')
+                break
+    if content.startswith((b'\xff\xfe', b'\xfe\xff', b'\xef\xbb\xbf')):
+        text = decode(content)
+    elif charset:
+        try:
+            text = content.decode(charset, errors='replace')
+        except LookupError:
+            text = decode(content)
+    else:
+        text = decode(content)
+    result = html_to_text(text)
     result['sourceUrl'] = url.strip()
     return checked(result)
 
@@ -392,9 +570,11 @@ def is_punctuated(cleaned):
     return bool(cleaned) and sum(bool(re.search(r'[.!?]', item['text'])) for item in cleaned) >= len(cleaned) * 0.15
 
 
-def captions_to_text(snippets):
+def captions_to_text(snippets, *, preserve_text=False):
     """Join caption pieces into paragraphs; unpunctuated automatic captions are broken into short lines."""
-    cleaned = clean_captions(snippets)
+    # Uploaded subtitles can contain spoken parentheticals and bracketed text;
+    # the YouTube cleanup removes these as presumed sound descriptions.
+    cleaned = snippets if preserve_text else clean_captions(snippets)
     if not cleaned:
         return ''
     paragraphs, current = [], []
@@ -470,15 +650,28 @@ def youtube_transcript(url, api=None, title=youtube_title):
     video = youtube_id(url)
     if not video:
         raise ValueError('無法辨識這個 YouTube 網址。')
+    if api is not None:
+        return _youtube_transcript(video, api, title)
     try:
-        if api is None:
-            from youtube_transcript_api import YouTubeTranscriptApi
-            api = YouTubeTranscriptApi()
-        listing = api.list(video)
+        from requests import Session
+        from youtube_transcript_api import YouTubeTranscriptApi
     except ImportError as error:
-        raise RuntimeError('尚未安裝 youtube-transcript-api，請執行 python -m pip install --target .deps -r requirements.txt。') from error
+        raise RuntimeError('尚未安裝 youtube-transcript-api，請執行 python3 -m pip install --target .deps -r requirements.txt。') from error
+
+    class TimedSession(Session):
+        def request(self, method, url, **kwargs):
+            kwargs.setdefault('timeout', (5, 15))
+            return super().request(method, url, **kwargs)
+
+    with TimedSession() as session:
+        return _youtube_transcript(video, YouTubeTranscriptApi(http_client=session), title)
+
+
+def _youtube_transcript(video, api, title):
+    try:
+        listing = api.list(video)
     except Exception as error:
-        raise ValueError('無法取得這部影片的字幕；影片可能不存在、不公開或沒有字幕。') from error
+        raise ValueError('無法取得這部影片的字幕。請確認影片公開且有字幕，或稍後重試；YouTube 也可能暫時限制連線。') from error
     preferred = ['en', 'en-US', 'en-GB', 'en-CA', 'en-AU']
     transcript = None
     for finder in ('find_manually_created_transcript', 'find_generated_transcript'):

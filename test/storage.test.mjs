@@ -1,6 +1,25 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createLargeStorage } from '../site/storage.mjs';
+import { availableLocalStorage, createLargeStorage } from '../site/storage.mjs';
+
+test('blocked localStorage getter uses volatile session storage and signals the error', () => {
+  let reads = 0, errors = 0;
+  const scope = { get localStorage() { reads++; throw new DOMException('Blocked', 'SecurityError'); } };
+  const local = availableLocalStorage(scope, () => errors++);
+  local.setItem('progress', 4);
+  assert.equal(local.getItem('progress'), '4');
+  local.removeItem('progress');
+  assert.equal(local.getItem('progress'), null);
+  assert.equal(reads, 1);
+  assert.equal(errors, 1);
+  assert.equal(local.volatile, true);
+});
+
+test('large-storage wrapper preserves the volatile marker', async () => {
+  const local = availableLocalStorage({}, () => {});
+  const backend = { read:async () => undefined, write:async () => {} };
+  assert.equal((await createLargeStorage(local, backend)).volatile, true);
+});
 
 test('migrates large values once and persists subsequent writes in the database', async () => {
   const local = new Map([['lingtype-custom-lessons', 'old']]);
@@ -23,4 +42,11 @@ test('reports database write failure and retains current in-memory data', async 
   await assert.rejects(large.flush(), /quota/);
   assert.equal(large.getItem('lingtype-translations'), 'current');
   assert.equal(errors.length, 1);
+});
+
+test('a transaction rejecting with null still fails flush', async () => {
+  const large = await createLargeStorage(null, {read:async () => undefined, write:async () => { throw null; }});
+  large.setItem('lingtype-custom-lessons', 'unsaved');
+  await assert.rejects(large.flush(), /Database write failed/);
+  assert.equal(large.getItem('lingtype-custom-lessons'), 'unsaved');
 });

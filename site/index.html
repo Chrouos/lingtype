@@ -6,21 +6,20 @@
 <meta name="theme-color" content="#f4f5f7">
 <meta name="theme-color" content="#111214" media="(prefers-color-scheme: dark)">
 <title>Lingtype</title>
-<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="vendor/geist/wght.css">
 <link rel="stylesheet" href="style.css">
+<script type="importmap">{ "imports": { "motion": "./vendor/motion/index.mjs" } }</script>
 </head>
 <body>
 <a class="skip-link" href="#main-content" data-i18n="skip">跳到主要內容</a>
 <header class="bar">
   <div class="bar-inner">
-    <a class="brand" href="#practice" id="brand"><svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true"><rect x="1" y="3" width="22" height="18" rx="5"/><rect class="brand-caret" x="10.5" y="7.5" width="3" height="9" rx="1"/></svg><span>Lingtype</span></a>
+    <a class="brand" href="#public" id="brand"><svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true"><rect x="1" y="3" width="22" height="18" rx="5"/><rect class="brand-caret" x="10.5" y="7.5" width="3" height="9" rx="1"/></svg><span>Lingtype</span></a>
     <nav class="nav" data-i18n-aria="nav.label" aria-label="主要功能">
-      <button id="nav-practice" type="button" aria-current="page" data-i18n="nav.practice">練習</button>
-      <button id="nav-import" type="button" data-i18n="nav.import">匯入</button>
-      <button id="nav-notebook" type="button" data-i18n="nav.notebook">單字本</button>
-      <button id="nav-public" type="button" data-i18n="nav.public">書房</button>
-      <button id="nav-history" type="button" data-i18n="nav.history">紀錄</button>
+      <button id="nav-public" type="button" aria-current="page"><span class="icon" data-icon="library" aria-hidden="true"></span><span data-i18n="nav.public">書庫</span></button>
+      <button id="nav-shelf" type="button"><span class="icon" data-icon="book-open" aria-hidden="true"></span><span data-i18n="nav.shelf">我的書櫃</span></button>
+      <button id="nav-notebook" type="button"><span class="icon" data-icon="notebook-pen" aria-hidden="true"></span><span data-i18n="nav.notebook">單字本</span></button>
+      <button id="nav-history" type="button"><span class="icon" data-icon="chart-line" aria-hidden="true"></span><span data-i18n="nav.history">紀錄</span></button>
     </nav>
     <label class="lang"><span class="sr-only" data-i18n="language">語言</span><select id="language"><option value="zh">繁體中文</option><option value="ja">日本語</option><option value="ko">한국어</option></select></label>
   </div>
@@ -29,34 +28,56 @@
 <main id="main-content" tabindex="-1">
   <p id="lock-warning" class="notice" role="status" hidden></p>
   <div id="view-practice" class="view">
-    <section id="lesson-chooser" class="lesson-chooser" hidden aria-labelledby="choose-heading">
-      <h1 id="choose-heading" data-i18n="choose.title">選擇練習文本</h1>
-      <label class="field"><span data-i18n="lesson">教材</span><select id="preview-lesson"></select></label>
-      <h2 data-i18n="choose.preview">文本預覽</h2>
-      <div id="lesson-preview" class="lesson-preview" tabindex="0"></div>
-      <div class="preview-actions"><button id="preview-start" class="btn primary" type="button" data-i18n="choose.start">開始練習</button><button id="preview-back" class="btn" type="button" data-i18n="choose.back">返回練習</button></div>
+    <section id="lesson-chooser" class="book-page" hidden aria-labelledby="choose-heading">
+      <button id="preview-back" class="btn-quiet back" type="button"><span class="icon" data-icon="arrow-left" aria-hidden="true"></span><span data-i18n="book.back">我的書櫃</span></button>
+      <div class="detail-top">
+        <div id="book-cover" class="detail-cover" aria-hidden="true"></div>
+        <div class="detail-info">
+          <p id="book-eyebrow" class="eyebrow"></p>
+          <h1 id="choose-heading"></h1>
+          <p id="book-meta" class="book-meta" hidden></p>
+          <div class="book-progress"><progress id="book-progress" max="100" value="0" data-i18n-aria="book.progressLabel" aria-label="閱讀進度"></progress><span id="book-progress-text"></span></div>
+          <p id="book-where" class="muted small"></p>
+          <div class="preview-actions">
+            <button id="preview-start" class="btn primary" type="button"><span class="icon" data-icon="play" aria-hidden="true"></span><span id="preview-start-label">繼續閱讀</span></button>
+            <button id="book-restart" class="btn" type="button" data-i18n="book.fromStart">從頭開始</button>
+            <button id="book-words" class="btn" type="button" hidden>練習這本書的單字</button>
+            <button id="book-share" class="btn" type="button" hidden><span class="icon" data-icon="share-2" aria-hidden="true"></span><span data-i18n="book.share">分享到書庫</span></button>
+          </div>
+          <label hidden><span data-i18n="lesson">教材</span><select id="preview-lesson"></select></label>
+        </div>
+      </div>
+      <h2 data-i18n="book.contents">目錄</h2>
+      <p class="muted small" data-i18n="book.contentsHelp">點一段就從那裡開始讀，一直讀到這一章結束。</p>
+      <div id="lesson-preview" class="toc"></div>
     </section>
     <div id="practice-content">
     <p id="workspace-notice" class="notice" role="status" hidden></p>
     <p id="translation-progress" class="notice" role="status" hidden><span id="translation-progress-text"></span> <button id="translation-retry" type="button" data-i18n="translation.retry" hidden>重試翻譯</button></p>
     <p id="session-toast" class="toast" role="status" hidden></p>
     <div class="practice-head">
-      <h1 class="lesson-heading"><label class="sr-only" for="lesson" data-i18n="lesson">教材</label><select id="lesson"></select></h1>
-      <button id="choose-lesson" class="btn" type="button" data-i18n="choose.open">選擇文本</button>
+      <div class="reader-title">
+        <h1 class="lesson-heading"><span id="reader-title"></span><label hidden><span data-i18n="lesson">教材</span><select id="lesson"></select></label></h1>
+        <p id="reader-crumb" class="reader-crumb"></p>
+      </div>
+      <button id="choose-lesson" class="btn" type="button"><span class="icon" data-icon="table-of-contents" aria-hidden="true"></span><span data-i18n="book.contents">目錄</span></button>
       <div class="segmented" role="group" data-i18n-aria="mode.label" aria-label="練習模式">
-        <button id="article-mode" type="button" class="mode active" data-i18n="mode.article">文章</button>
-        <button id="word-mode" type="button" class="mode" data-i18n="mode.word">單字</button>
+        <button id="article-mode" type="button" class="mode active" aria-pressed="true" data-i18n="mode.article">文章</button>
+        <button id="word-mode" type="button" class="mode" aria-pressed="false" data-i18n="mode.word">單字</button>
       </div>
     </div>
-    <details id="scope-settings" class="scope-settings" open>
-      <summary data-i18n="scope.settings">範圍與來源</summary>
+    <div id="scope-settings" class="scope-settings">
     <div class="scope">
+      <div hidden>
       <span id="category" hidden></span>
       <label id="section-label" class="chip-select" hidden><span class="sr-only" data-i18n="section">章節</span><select id="section-mode"><option value="all" data-i18n="section.all">全部章節</option></select></label>
-      <label id="passage-label" class="chip-select" hidden><span class="sr-only" data-i18n="passage">範圍</span><select id="passage-mode"><option value="full" data-i18n="passage.full">全文</option><option value="random" data-i18n="passage.random">隨機段落</option></select></label>
+      <label id="passage-label" class="chip-select" hidden><span class="sr-only" data-i18n="passage">範圍</span><select id="passage-mode"><option value="full" data-i18n="passage.full">全文</option><option value="random" data-i18n="passage.random">隨機段落</option><option value="from" data-i18n="passage.from">從指定段落</option></select></label>
+      <label id="passage-choice-label" class="chip-select" hidden><span class="sr-only" data-i18n="passage.choose">選擇段落</span><select id="passage-choice"></select></label>
+      <span id="passage-navigation" class="chip-select" hidden><label><input id="passage-saved-only" type="checkbox"><span data-i18n="passage.onlySaved">只看有進度</span></label><button type="button" id="passage-prev" data-i18n="passage.previous">上一頁</button><span id="passage-page" aria-live="polite"></span><button type="button" id="passage-next" data-i18n="passage.next">下一頁</button><label><span class="sr-only" data-i18n="passage.number">段落編號</span><input id="passage-number" type="number" min="1" inputmode="numeric"></label><button type="button" id="passage-go" data-i18n="passage.go">前往段落</button></span>
+      </div>
       <span id="source-info" class="source" hidden></span>
     </div>
-    </details>
+    </div>
 
     <section class="workspace" data-i18n-aria="nav.practice" aria-label="練習">
       <div class="workspace-head">
@@ -75,6 +96,7 @@
               <div class="menu-list">
                 <button id="export-workbook" type="button" data-i18n="action.export">匯出練習冊</button>
                 <button id="publish-workbook" type="button" data-i18n="action.publish">公開分享</button>
+                <button id="edit-lesson" type="button" data-i18n="lessonEdit.open">編輯並另存教材</button>
                 <button id="menu-restart" type="button" data-i18n="action.restart">重新開始</button>
                 <button id="delete-lesson" type="button" class="danger" hidden data-i18n="action.delete">刪除教材</button>
               </div>
@@ -114,7 +136,17 @@
     </div>
   </div>
 
+  <section id="view-shelf" class="view" hidden aria-labelledby="shelf-heading">
+    <div class="shelf-head">
+      <div><h1 id="shelf-heading"><span data-i18n="shelf.title">我的書櫃</span><span class="count" id="shelf-count"></span></h1><p class="muted" data-i18n="shelf.lead">從書庫加入的書和你自己匯入的文章都放在這裡，隨時拿出來接著讀。</p></div>
+      <button id="shelf-import" class="btn primary" type="button"><span class="icon" data-icon="book-plus" aria-hidden="true"></span><span data-i18n="shelf.import">加入自己的書</span></button>
+    </div>
+    <div id="shelf-continue" class="continue-card" hidden></div>
+    <ul id="shelf-books" class="books my-books"></ul>
+  </section>
+
   <section id="view-import" class="view narrow" hidden aria-labelledby="import-title-heading">
+    <button id="import-back" class="btn-quiet back" type="button"><span class="icon" data-icon="arrow-left" aria-hidden="true"></span><span data-i18n="book.back">我的書櫃</span></button>
     <h1 id="import-title-heading" data-i18n="import.title">匯入教材</h1>
     <p class="import-lead" data-i18n="import.lead">從影片、網頁或文件匯入，邊讀邊打字。</p>
     <form id="arxiv-form" class="url-row">
@@ -155,25 +187,20 @@
 
   <section id="view-public" class="view" hidden aria-labelledby="public-heading">
     <div class="shelf-head">
-      <div><h1 id="public-heading" data-i18n="public.title">社群書房</h1><p class="muted" data-i18n="public.lead">挑一篇大家分享的文章，用打字的節奏慢慢讀完。</p></div>
-      <button id="public-share" class="btn primary" type="button" data-i18n="public.share">分享文章</button>
+      <div><h1 id="public-heading" data-i18n="public.title">書庫</h1><p class="muted" data-i18n="public.lead">挑一本書加入書櫃，用打字的節奏一段一段讀完。</p></div>
+      <button id="public-share" class="btn share-open" type="button"><span class="icon" data-icon="upload" aria-hidden="true"></span><span data-i18n="public.share">上傳書本</span></button>
     </div>
-    <form id="public-share-form" class="card share-form" hidden>
-      <label class="field"><span data-i18n="public.shareLesson">要分享的教材</span><select id="public-share-lesson"></select></label>
-      <label class="field"><span data-i18n="public.shareCover">封面圖片（選填）</span><input id="public-share-cover" type="file" accept="image/png,image/jpeg,image/webp"></label>
-      <p class="muted small" data-i18n="public.shareNote">分享後所有人都能閱讀與練習，請確認你有權公開這篇文章和圖片。</p>
-      <div class="form-foot"><button class="btn primary" type="submit" data-i18n="public.shareSubmit">公開分享</button><button id="public-share-cancel" class="btn" type="button" data-i18n="public.shareCancel">取消</button><span id="public-share-message" class="message" role="status"></span></div>
-    </form>
     <div id="public-detail" class="public-detail" hidden></div>
     <div id="public-shelf" class="shelf">
       <div class="shelf-main">
         <div class="shelf-tools">
-          <input id="public-search" type="search" data-i18n-placeholder="public.search" data-i18n-aria="public.search" placeholder="搜尋標題或內容">
+          <input id="public-search" type="search" maxlength="200" data-i18n-placeholder="public.search" data-i18n-aria="public.search" placeholder="搜尋標題或內容">
           <label class="chip-select"><span class="sr-only" data-i18n="public.sort">排序</span><select id="public-sort"><option value="likes" data-i18n="public.sort.likes">最多人喜歡</option><option value="reads" data-i18n="public.sort.reads">最多人閱讀</option><option value="completion" data-i18n="public.sort.completion">完成率最高</option><option value="new" data-i18n="public.sort.new">最新分享</option></select></label>
         </div>
         <div id="public-filters" class="shelf-filters" role="group" data-i18n-aria="public.category"></div>
         <p id="public-message" class="message" role="status"></p>
         <ul id="public-books" class="books"></ul>
+        <nav id="public-pagination" class="form-foot" data-i18n-aria="public.pagination" aria-label="書架分頁" hidden><button id="public-prev" class="btn" type="button" data-i18n="public.prev">上一頁</button><span id="public-page" role="status"></span><button id="public-next" class="btn" type="button" data-i18n="public.next">下一頁</button></nav>
       </div>
       <aside class="shelf-rail">
         <section><h2 data-i18n="public.ranking">打字排行</h2><ol id="public-ranking" class="rank-list"></ol></section>
@@ -184,7 +211,7 @@
       <summary data-i18n="public.unpublish">用下架碼下架</summary>
       <form id="unpublish-form" class="form inline-form">
         <label class="field"><span data-i18n="public.id">分享網址或 ID</span><input id="unpublish-id" required></label>
-        <label class="field"><span data-i18n="public.key">下架碼</span><input id="unpublish-key" required autocomplete="off"></label>
+        <label class="field"><span data-i18n="public.key">下架碼（已保存在此瀏覽器時可留空）</span><input id="unpublish-key" autocomplete="off"></label>
         <div class="form-foot"><button class="btn" type="submit" data-i18n="public.remove">下架</button><span id="unpublish-message" class="message" role="status"></span></div>
       </form>
     </details>
@@ -203,13 +230,53 @@
       <p class="muted small" data-i18n="backup.note">備份包含教材、翻譯、單字本、紀錄及公開教材的下架碼，請妥善保存。</p>
       <div class="actions">
         <button id="backup-export" class="btn" type="button" data-i18n="backup.export">匯出所有資料</button>
-        <label class="btn" for="backup-file" data-i18n="backup.import">還原備份</label>
-        <input id="backup-file" type="file" accept=".json,application/json" class="sr-only">
+        <label class="btn backup-import"><span data-i18n="backup.import">還原備份</span><input id="backup-file" type="file" accept=".json,application/json" class="sr-only"></label>
       </div>
       <p id="backup-message" class="message" role="status"></p>
     </section>
   </section>
 </main>
+<dialog id="share-dialog" class="share-dialog" aria-labelledby="share-heading" aria-describedby="share-lead">
+  <form id="public-share-form" class="form">
+    <div class="dialog-head"><h2 id="share-heading" data-i18n="share.title">上傳書本到書庫</h2><button id="public-share-close" class="btn-quiet dialog-close" type="button" data-i18n-aria="share.close" aria-label="關閉"><span class="icon" data-icon="x" aria-hidden="true"></span></button></div>
+    <p id="share-lead" class="muted" data-i18n="share.lead">大家都能在書庫找到這本書，用打字一起讀完。這本書也會放進你的書櫃。</p>
+    <div class="share-source" role="radiogroup" data-i18n-aria="share.source" aria-label="書的來源">
+      <label><input type="radio" name="share-source" value="file" checked><span data-i18n="share.fromFile">上傳檔案</span></label>
+      <label><input type="radio" name="share-source" value="shelf"><span data-i18n="share.fromShelf">從我的書櫃選</span></label>
+    </div>
+    <label class="dropzone share-drop" id="public-share-file-field">
+      <input id="public-share-file" type="file" accept=".txt,.md,.markdown,.pdf,.docx,.epub,.html,.htm,.srt,.vtt,.json" aria-describedby="share-formats">
+      <strong id="public-share-file-name" data-i18n="import.drop">拖曳檔案到這裡，或點一下選擇</strong>
+      <span id="share-formats" data-i18n="import.formats">PDF · Word · EPUB · TXT · Markdown · HTML · SRT / VTT 字幕 · Lingtype 練習冊，20 MB 以內</span>
+    </label>
+    <label class="field" id="public-share-lesson-field" hidden><span data-i18n="share.book">要分享的書</span><select id="public-share-lesson"></select></label>
+    <fieldset class="share-categories" id="public-share-category">
+      <legend data-i18n="public.shareCategory">分類</legend>
+      <label><input type="radio" name="share-category" value="" checked><span data-i18n="public.shareCategoryAuto">自動判斷</span></label>
+      <label><input type="radio" name="share-category" value="novel"><span data-i18n="public.cat.novel">小說</span></label>
+      <label><input type="radio" name="share-category" value="arxiv"><span data-i18n="public.cat.arxiv">論文</span></label>
+      <label><input type="radio" name="share-category" value="web"><span data-i18n="public.cat.web">網路文章</span></label>
+      <label><input type="radio" name="share-category" value="document"><span data-i18n="public.cat.document">文件</span></label>
+    </fieldset>
+    <div class="share-cover">
+      <label class="btn"><input id="public-share-cover" type="file" accept="image/png,image/jpeg,image/webp" class="sr-only"><span data-i18n="share.cover">加上封面</span></label>
+      <span id="public-share-cover-name" class="muted small" data-i18n="share.coverHint">選填，PNG／JPEG／WebP，2 MB 以內</span>
+    </div>
+    <label class="share-rights"><input id="public-share-rights" type="checkbox" required><span data-i18n="share.rights">我有權公開這本書的內容和封面圖片。</span></label>
+    <p id="public-share-message" class="message" role="status"></p>
+    <div class="dialog-actions"><button id="public-share-cancel" class="btn" type="button" data-i18n="public.shareCancel">取消</button><button id="public-share-submit" class="btn primary" type="submit" data-i18n="share.submit">上傳到書庫</button></div>
+  </form>
+</dialog>
+<dialog id="lesson-edit-dialog" aria-labelledby="lesson-edit-heading" aria-describedby="lesson-edit-note">
+  <form id="lesson-edit-form" class="form">
+    <h2 id="lesson-edit-heading" data-i18n="lessonEdit.title">編輯並另存教材</h2>
+    <p id="lesson-edit-note" class="muted" data-i18n="lessonEdit.note">另存為純文字編輯版，不包含原章節、譯文、圖表或 PDF 頁面；長文章會依長度重新分段。公式會轉成需輸入的 TeX 文字。原教材與練習進度會保留。</p>
+    <label class="field"><span data-i18n="import.name">名稱</span><input id="lesson-edit-name" maxlength="100" required></label>
+    <label class="field"><span data-i18n="import.text">英文原文</span><textarea id="lesson-edit-text" rows="12" maxlength="1000000" required></textarea></label>
+    <p id="lesson-edit-error" class="message" role="alert"></p>
+    <div class="actions"><button id="lesson-edit-save" class="btn primary" type="submit" data-i18n="lessonEdit.save">另存教材</button><button id="lesson-edit-cancel" class="btn" type="button" data-i18n="translation.cancel">取消</button></div>
+  </form>
+</dialog>
 <dialog id="figure-dialog" aria-labelledby="figure-dialog-title">
   <div class="figure-dialog-head"><h2 id="figure-dialog-title"></h2><a id="figure-original" class="btn-quiet" target="_blank" rel="noopener noreferrer" data-i18n="figure.original">開啟原圖</a><button id="figure-close" class="btn" type="button" autofocus data-i18n="figure.close">關閉</button></div>
   <div id="figure-dialog-body" class="figure-dialog-body"></div>

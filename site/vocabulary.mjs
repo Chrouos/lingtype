@@ -14,6 +14,16 @@ export function articleWords(text) {
   return [...new Set((text.toLowerCase().match(/[a-z]+(?:['’][a-z]+)*/g) || []).map(word => word.replace('’', "'")))];
 }
 
+// Count a word only after its complete span in the original passage has been reached.
+export function practicedArticleWords(text, position) {
+  const words = [];
+  for (const match of text.matchAll(/[a-z]+(?:['’][a-z]+)*/gi)) {
+    if (match.index + match[0].length > position) break;
+    words.push(match[0].toLowerCase().replace('’', "'"));
+  }
+  return [...new Set(words)];
+}
+
 export function suggestWords(text, limit = 20) {
   return articleWords(text).filter(word => word.length > 2 && !common.has(word)).slice(0, Math.max(0, limit));
 }

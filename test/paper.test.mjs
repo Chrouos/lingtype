@@ -1,11 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createSentenceInput, separatorPositions } from '../site/sentences.mjs';
-import { splitSentences } from '../site/data.mjs';
+import { splitSentences, importedSections } from '../site/data.mjs';
 import { typedCounts } from '../site/typing.mjs';
 import { richText, plainText, formulaHtml, figureEvents, figureAt, figureHtml, figuresInText, cleanFormulas, cleanFigures } from '../site/paper.mjs';
 import { createWorkbook, readWorkbook } from '../site/workbook.mjs';
 import { createPageRenderer, pageFigures } from '../site/pdf-pages.mjs';
+import { readCustomLessons } from '../site/library.mjs';
 
 const F0 = '', F1 = '';
 const type = (sentences, keys) => { const step = createSentenceInput(sentences); let input = ''; for (const key of keys) input = step(input, input + key); return input; };
@@ -78,6 +79,59 @@ test('each page of an imported PDF shows beside its own text, even when pages st
   assert.match(figureHtml(figures[0], []), /class="pdf-page"/);
 });
 
+test('split PDF pages retain their page number in each reading segment', () => {
+  const text = Array.from({length:500}, (_, i) => `Sentence ${i} about the page. `).join('');
+  const sections = importedSections(text, [{title:'p. 4', text, page:4}]);
+  const figures = cleanFigures(pageFigures({text, sections}));
+  assert.ok(sections.length > 1);
+  for (const section of sections) {
+    const events = figureEvents(section.text, figures);
+    assert.equal(figures[figureAt(events, section.text.length)]?.page, 4);
+  }
+});
+
+test('a split PDF with only one nonempty page keeps its original page number', () => {
+  const text = 'One long page sentence. '.repeat(600);
+  const sections = importedSections(text, undefined, [], [7]);
+  const figures = pageFigures({text, sections, pages:[7]});
+  assert.ok(sections.length > 1);
+  assert.equal(sections.map(section => section.text).join(''), text);
+  assert.equal(figures.length, sections.length);
+  assert.ok(figures.every(figure => figure.page === 7));
+});
+
+test('identical page anchors cannot select a different PDF page for a selected section', () => {
+  const repeated = 'Shared page heading. '.repeat(20);
+  const first = repeated + 'First page.', second = repeated + 'Second page.';
+  const sections = importedSections(first + second, [{title:'p. 1', text:first, page:1}, {title:'p. 2', text:second, page:2}]);
+  const figures = cleanFigures(pageFigures({sections}));
+  const events = figureEvents(sections[0].text, figures, sections[0].page);
+  assert.equal(figures[figureAt(events, sections[0].text.length)]?.page, 1);
+  const longPage = repeated.repeat(40) + 'Long page.';
+  const split = importedSections(longPage + second, [{title:'p. 1', text:longPage, page:1}, {title:'p. 2', text:second, page:2}]);
+  const splitFigures = cleanFigures(pageFigures({sections:split}));
+  for (const section of split.filter(value => value.page === 1)) {
+    const matches = figureEvents(section.text, splitFigures, section.page);
+    assert.equal(splitFigures[figureAt(matches, section.text.length)]?.page, 1);
+  }
+});
+
+test('reloading a long PDF keeps page figures past 500, including split pages', () => {
+  const pages = Array.from({length:2000}, (_, index) => ({title:`p. ${index + 1}`, text:`Page ${index + 1}.`, page:index + 1}));
+  pages[500].text = 'Long page content. '.repeat(800);
+  const sections = importedSections(pages.map(page => page.text).join('\n\n'), pages);
+  const figures = pageFigures({sections});
+  assert.ok(figures.length > 2000);
+  const item = {id:'large-pdf', title:'Large PDF', text:'PDF text', words:[], sections, figures};
+  const storage = {getItem:key => key === 'lingtype-custom-lessons' ? JSON.stringify([item]) : null};
+  const [reloaded] = readCustomLessons(storage);
+  assert.equal(reloaded.figures.length, figures.length);
+  assert.equal(reloaded.figures.at(-1).page, 2000);
+  assert.equal(reloaded.figures.filter(figure => figure.page === 501).length, sections.filter(section => section.page === 501).length);
+  assert.throws(() => cleanFigures(figures), /figures/); // shared workbook limit stays bounded
+  assert.throws(() => cleanFigures(Array.from({length:501}, () => ({kind:'figure'})), {allowPdfPages:true}), /figures/);
+});
+
 test('page figures stay out of a shared workbook', () => {
   const item = { title:'Book', text:'Words here.', words:[], translations:{}, figures:pageFigures({ text:'Words here.', pages:[1] }) };
   assert.equal(createWorkbook(item).lesson.figures, undefined);
@@ -89,6 +143,56 @@ test('a page whose PDF is not in this browser draws nothing and loads no library
   assert.equal(await pages.page('missing', 1), null);
   assert.equal(loaded, false);
   pages.forget('missing');
+});
+
+test('a PDF missing on the first read can be opened after it becomes available', async () => {
+  let available = false, reads = 0, loads = 0;
+  const pages = createPageRenderer(async () => { reads++; return available ? new Blob(['pdf']) : null; }, {
+    load:async () => { loads++; return {getDocument:() => ({promise:Promise.resolve({numPages:0})})}; }
+  });
+  assert.equal(await pages.page('later', 1), null);
+  available = true;
+  assert.equal(await pages.page('later', 1), null); // The mock document has no pages.
+  assert.equal(reads, 2);
+  assert.equal(loads, 1);
+});
+
+test('a rejected evicted PDF request cannot remove a newer request for the same page', async () => {
+  let rejectOld, resolveNew, reads = 0;
+  const pages = createPageRenderer(id => {
+    if (id !== 'a') return Promise.resolve(null);
+    reads++;
+    return reads === 1 ? new Promise((_, reject) => { rejectOld = reject; }) : new Promise(resolve => { resolveNew = resolve; });
+  });
+  const old = pages.page('a', 1).catch(() => null);
+  await Promise.all(['b', 'c', 'd'].map(id => pages.page(id, 1)));
+  const current = pages.page('a', 1);
+  rejectOld(new Error('old request failed'));
+  await old;
+  assert.equal(pages.page('a', 1), current, 'old page rejection must not evict the new drawing');
+  const anotherPage = pages.page('a', 2);
+  assert.equal(reads, 2, 'old document rejection must not evict the new open');
+  resolveNew(null);
+  assert.deepEqual(await Promise.all([current, anotherPage]), [null, null]);
+});
+
+test('an evicted missing page cannot remove a newer drawing for the same key', async () => {
+  let resolveOld, resolveNew, reads = 0;
+  const pages = createPageRenderer(id => {
+    if (id !== 'a') return Promise.resolve(null);
+    reads++;
+    return new Promise(resolve => { if (reads === 1) resolveOld = resolve; else resolveNew = resolve; });
+  });
+  const old = pages.page('a', 1);
+  await Promise.all(['b', 'c', 'd'].map(id => pages.page(id, 1)));
+  const current = pages.page('a', 1);
+  resolveOld(null);
+  await old;
+  assert.equal(pages.page('a', 1), current);
+  const anotherPage = pages.page('a', 2);
+  assert.equal(reads, 2, 'old missing document must not evict the new open');
+  resolveNew(null);
+  assert.deepEqual(await Promise.all([current, anotherPage]), [null, null]);
 });
 
 test('the strip lists each figure in the text once, in paper order', () => {

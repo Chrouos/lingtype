@@ -1,7 +1,7 @@
 // Run against a server with a few shared books, e.g. LINGTYPE_PORT=8766 python server.py; set LINGTYPE_URL to change the address.
 import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
-import { Browser } from '../.agents/skills/design-taste-frontend/scripts/lib/cdp.mjs';
+import { Browser } from './helpers/browser.mjs';
 
 const base = process.env.LINGTYPE_URL || 'http://127.0.0.1:8766/';
 await mkdir('.taste-skill', { recursive:true });
@@ -37,7 +37,9 @@ try {
   const text = await page.eval(async id => (await (await fetch(`/api/workbooks/${id}`)).json()).lesson.text.trim(), target.id);
   // The page's clock is moved on 4 seconds per 40 characters, about 120 WPM, so the run looks typed rather than pasted.
   await page.eval(() => { let offset = 0; const real = performance.now.bind(performance); performance.now = () => real() + offset; window.advanceClock = ms => { offset += ms; }; document.getElementById('typing').focus(); });
-  for (let i = 0; i < text.length; i += 40) { if (i) await page.eval(() => window.advanceClock(4000)); await page.send('Input.insertText', { text:text.slice(i, i + 40) }); }
+  // Start the clock with a first character even for a book shorter than 40 characters.
+  await page.send('Input.insertText', { text:text.slice(0, 1) });
+  for (let i = 1; i < text.length; i += 40) { await page.eval(() => window.advanceClock(4000)); await page.send('Input.insertText', { text:text.slice(i, i + 40) }); }
   await new Promise(resolve => setTimeout(resolve, 800));
   assert.equal(await page.eval(() => document.getElementById('result').hidden), false, 'the article was typed to its end');
   const after = await page.eval(async id => (await (await fetch(`/api/workbooks/${id}/community`)).json()), target.id);

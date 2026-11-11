@@ -22,6 +22,23 @@ export function createTranslationCache(storage, request, existing) {
     cache[`manual\u0000${id}`] = '1';
     try { storage?.setItem('lingtype-translations', JSON.stringify(cache)); return true; } catch { return false; }
   }
+  function remember(byLanguage) {
+    if (!byLanguage || typeof byLanguage !== 'object') return;
+    let changed = false;
+    for (const language of ['zh', 'ja', 'ko']) {
+      const entries = byLanguage[language];
+      if (!entries || typeof entries !== 'object' || Array.isArray(entries)) continue;
+      for (const [sentence, text] of Object.entries(entries)) {
+        const id = key(sentence, language);
+        if (!sentence || typeof text !== 'string' || !text.trim() || cache[`manual\u0000${id}`]) continue;
+        revisions.set(id, (revisions.get(id) || 0) + 1);
+        cache[id] = text;
+        if (text.trim() === sentence) cache[`manual\u0000${id}`] = '1';
+        changed = true;
+      }
+    }
+    if (changed) try { storage?.setItem('lingtype-translations', JSON.stringify(cache)); } catch { /* kept for this visit */ }
+  }
   async function translate(sentences, language) {
     // Python counts Unicode code points; avoid rejecting valid neighbours of an oversized sentence.
     const missing = [...new Set(sentences.filter(sentence => sentence && [...sentence].length <= 15000 && !get(sentence, language) && !pending.has(key(sentence, language))))];
@@ -58,5 +75,5 @@ export function createTranslationCache(storage, request, existing) {
     }
     return failed === 0;
   }
-  return { get, set, translate, prefetch };
+  return { get, set, remember, translate, prefetch };
 }

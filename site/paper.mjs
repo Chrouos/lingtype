@@ -65,9 +65,16 @@ export function cleanFormulas(value) {
 }
 
 const shortText = (value, limit) => typeof value === 'string' && value.length <= limit ? value : '';
-export function cleanFigures(value) {
+export function cleanFigures(value, { allowPdfPages = false } = {}) {
   if (value === undefined) return undefined;
-  if (!Array.isArray(value) || value.length > 500) throw new Error('figures');
+  if (!Array.isArray(value)) throw new Error('figures');
+  // Imported PDFs may have 2,000 pages, and a long page can have several
+  // reading sections. Keep the smaller limit for shared or ordinary figures.
+  if (value.length > 500) {
+    if (!allowPdfPages || value.length > 4500) throw new Error('figures');
+    const pages = value.filter(figure => figure?.kind === 'page' && Number.isInteger(figure.page) && figure.page > 0 && figure.page <= 2000).length;
+    if (pages > 4000 || value.length - pages > 500) throw new Error('figures');
+  }
   return value.map(figure => {
     if (!figure || typeof figure !== 'object') throw new Error('figures');
     const images = Array.isArray(figure.images) ? figure.images.filter(url => typeof url === 'string' && IMAGE_URL.test(url)).slice(0, 12) : [];
@@ -83,9 +90,10 @@ const figureKey = label => {
 };
 
 // Where in the text each figure becomes the one to look at: where the text mentions it, and where it stood in the paper.
-export function figureEvents(text, figures) {
+export function figureEvents(text, figures, page = null) {
   if (!figures?.length) return [];
-  const byKey = new Map(figures.map((figure, index) => [figureKey(figure.label || ''), index]).filter(([key]) => key));
+  const included = figure => figure.kind !== 'page' || page === null || figure.page === page;
+  const byKey = new Map(figures.map((figure, index) => [included(figure) ? figureKey(figure.label || '') : '', index]).filter(([key]) => key));
   const events = [];
   for (const match of text.matchAll(/\b(?:Fig(?:ure)?s?\.?|Tables?|Tab\.)\s*[A-Z]?\d+(?:\.\d+)?/g)) {
     const index = byKey.get(figureKey(match[0]));
@@ -94,7 +102,7 @@ export function figureEvents(text, figures) {
   // Figures stand in the paper in order, so each place is searched for after the previous one (page headers repeat).
   let from = 0;
   figures.forEach((figure, index) => {
-    if (!figure.anchor) return;
+    if (!figure.anchor || !included(figure)) return;
     const anchor = typeable(figure.anchor).trim();
     if (!anchor) return;
     let found = text.indexOf(anchor, from);

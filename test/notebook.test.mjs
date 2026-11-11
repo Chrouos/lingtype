@@ -8,6 +8,15 @@ test('next review time identifies the earliest future review', () => {
   assert.equal(nextReviewTime(entries, 6000), null);
 });
 
+test('out-of-range review timestamps are treated as due rather than formatted', () => {
+  const invalid = 8_640_000_000_000_001;
+  const storage = {getItem:() => JSON.stringify([{word:'harbour', translations:{}, sentences:[], reviewDue:invalid}])};
+  const entries = readNotebook(storage);
+  assert.equal(entries[0].reviewDue, undefined);
+  assert.equal(dueWords(entries, 0).length, 1);
+  assert.equal(nextReviewTime([{reviewDue:invalid}], 0), null);
+});
+
 test('review schedule includes new and due words and advances or resets after practice', () => {
   const day = 86400000;
   let items = addWord([], {word:'harbour'}, 100);
@@ -19,6 +28,17 @@ test('review schedule includes new and due words and advances or resets after pr
   assert.equal(items[0].reviewIntervalDays, 3);
   items = recordPractice(items, new Set(['harbour']), new Set(['harbour']), 100 + 4 * day);
   assert.equal(items[0].reviewIntervalDays, 1);
+});
+
+test('finishing a previously missed word after resuming preserves its review schedule', () => {
+  let entries = addWord([], {word:'harbour'}, 1);
+  entries = recordPractice(entries, new Set(), new Set(['harbour']), 100);
+  const due = entries[0].reviewDue;
+  entries = recordPractice(entries, new Set(['harbour']), new Set(), 200, new Set(['harbour']));
+  assert.equal(entries[0].practiced, 1);
+  assert.equal(entries[0].missed, 1);
+  assert.equal(entries[0].reviewIntervalDays, 1);
+  assert.equal(entries[0].reviewDue, due);
 });
 
 test('editing a word translation preserves other languages and review history', () => {
@@ -35,6 +55,9 @@ test('a word keeps the sentence it was met in, once per sentence and at most thr
   assert.equal(sentenceWith(text, 'harbour'), 'The harbour lights flickered across the water.');
   assert.equal(sentenceWith(text, 'dusk'), 'Boats returned before dusk.');
   assert.equal(sentenceWith('It isn’t here.', "isn't"), 'It isn’t here.');
+  assert.equal(sentenceWith("Don't stop. Don returned.", 'don'), 'Don returned.');
+  assert.equal(sentenceWith("He said 'hello' to James' friends.", 'hello'), "He said 'hello' to James' friends.");
+  assert.equal(sentenceWith("He said 'hello' to James' friends.", 'james'), "He said 'hello' to James' friends.");
   assert.equal(sentenceWith(text, 'missing'), '');
   let entries = addWord([], { word:'Harbour', sentence:'The harbour lights flickered across the water.', source:'Notes', translations:{ zh:'港口', ja:'' } }, 1);
   entries = addWord(entries, { word:'harbour', sentence:'The harbour lights flickered across the water.', source:'Notes' }, 2);
@@ -59,6 +82,32 @@ test('practice puts the most missed words first and the notebook becomes a lesso
   assert.equal(notebookLesson([{ word:'alone', translations:{}, sentences:[], added:0, practiced:0, missed:0 }], 'N').text, 'alone');
 });
 
+test('revisiting a long sentence does not replace other saved examples', () => {
+  const long = `The harbour ${'water '.repeat(90)}is calm.`;
+  let entries = addWord([], { word:'harbour', sentence:long });
+  entries = addWord(entries, { word:'harbour', sentence:'Another harbour.' });
+  entries = addWord(entries, { word:'harbour', sentence:long });
+  assert.deepEqual(entries[0].sentences.map(item => item.text), [long.slice(0, 400), 'Another harbour.']);
+});
+
+test('long sentence excerpts include the selected word even near the end', () => {
+  const long = `${'Water '.repeat(90)}The harbour is calm.`;
+  let entries = addWord([], { word:'harbour', sentence:long });
+  assert.ok(entries[0].sentences[0].text.includes('harbour'));
+  assert.ok(entries[0].sentences[0].text.length <= 400);
+  entries = addWord(entries, { word:'harbour', sentence:long });
+  assert.equal(entries[0].sentences.length, 1);
+});
+
+test('long excerpts do not split emoji at either boundary', () => {
+  const prefix = `${'a'.repeat(303)}😀${'a'.repeat(194)} `;
+  const sentence = `${prefix}harbour${'😀'.repeat(200)}`;
+  const excerpt = addWord([], { word:'harbour', sentence })[0].sentences[0].text;
+  assert.ok(excerpt.includes('harbour'));
+  assert.ok(excerpt.length <= 400);
+  assert.ok(Array.from(excerpt).every(char => { const code = char.codePointAt(0); return code < 0xD800 || code > 0xDFFF; }));
+});
+
 test('the notebook survives storage and ignores damaged data', () => {
   const data = {};
   const storage = { getItem:key => data[key] ?? null, setItem(key, value) { data[key] = value; } };
@@ -69,4 +118,7 @@ test('the notebook survives storage and ignores damaged data', () => {
   assert.deepEqual(readNotebook(storage), []);
   data['lingtype-notebook'] = JSON.stringify([{ word:'' }, null, { word:'ok', sentences:[] }]);
   assert.deepEqual(readNotebook(storage).map(entry => entry.word), ['ok']);
+  const repaired = readNotebook(storage);
+  assert.deepEqual(notebookLesson(repaired, 'Notebook').words, [['ok', '', '', '']]);
+  assert.equal(recordPractice(repaired, new Set(['ok']), new Set(), 1)[0].practiced, 1);
 });

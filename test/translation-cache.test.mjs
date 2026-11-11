@@ -13,6 +13,21 @@ test('manual sentence translation survives a pending machine translation and sto
   assert.equal(createTranslationCache(storage, () => []).get('Hello.', 'zh'), 'manual');
 });
 
+test('imported subtitles survive an older pending translation and preserve manual corrections', async () => {
+  const saved = {}, storage = {getItem:k => saved[k], setItem:(k,v) => { saved[k]=v; }};
+  let release;
+  const service = createTranslationCache(storage, async () => { await new Promise(resolve => { release=resolve; }); return ['machine']; });
+  service.set('Edited.', 'zh', 'My correction');
+  const pending = service.translate(['Hello.'], 'zh');
+  service.remember({zh:{'Hello.':'Imported subtitle', 'Edited.':'Different subtitle', 'Paris.':'Paris.'}});
+  release();
+  assert.deepEqual(await pending, ['Imported subtitle']);
+  const reloaded = createTranslationCache(storage, () => []);
+  assert.equal(reloaded.get('Hello.', 'zh'), 'Imported subtitle');
+  assert.equal(reloaded.get('Edited.', 'zh'), 'My correction');
+  assert.equal(reloaded.get('Paris.', 'zh'), 'Paris.');
+});
+
 test('a manually confirmed unchanged sentence remains usable', () => {
   const saved = {}, storage = {getItem:k => saved[k], setItem:(k,v) => {saved[k]=v;}};
   createTranslationCache(storage, () => []).set('Paris.', 'zh', 'Paris.');

@@ -1,5 +1,6 @@
 import unittest
 import threading
+from io import BytesIO
 from http.server import ThreadingHTTPServer
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
@@ -125,7 +126,7 @@ class ArxivTests(unittest.TestCase):
         self.assertIsNone(handler.redirect_request(req, None, 302, 'Found', {}, 'https://example.com/'))
 
     def test_error_message_identifies_http_and_network_failures(self):
-        http = HTTPError('https://arxiv.org/html/2610.32770', 403, 'Forbidden', {}, None)
+        http = HTTPError('https://arxiv.org/html/2610.32770', 403, 'Forbidden', {}, BytesIO())
         self.assertIn('HTTP 403', fetch_error_message(http))
         http.close()
         self.assertIn('connection refused', fetch_error_message(URLError('connection refused')))

@@ -14,6 +14,8 @@ test('the shelf keeps only real books and fills missing numbers', () => {
   assert.deepEqual(books.map(book => book.title), ['Old favourite', 'New and unread', 'Finished by all']);
   const old = cleanShelf({ books:[{ id:id(5), title:'From an older server', createdAt:'2026-01-01' }] }).books[0];
   assert.equal(old.likes, 0); assert.equal(old.completionRate, null); assert.equal(old.hasCover, false);
+  const name = '𠮷'.repeat(150);
+  assert.deepEqual(cleanShelf({books:[{id:id(6), title:'Unicode', authors:[name]}]}).books[0].authors, [name]);
 });
 
 test('books sort by likes, readers, completion rate or date, and filter by category and words', () => {

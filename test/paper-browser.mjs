@@ -2,9 +2,10 @@
 // Needs network access to arxiv.org.
 import assert from 'node:assert/strict';
 import { mkdirSync } from 'node:fs';
-import { Browser } from '../.agents/skills/design-taste-frontend/scripts/lib/cdp.mjs';
+import { Browser } from './helpers/browser.mjs';
 
-const base = process.env.LINGTYPE_URL || 'http://127.0.0.1:8765/';
+// The reader opens at #practice; the home page is the library.
+const base = new URL('#practice', process.env.LINGTYPE_URL || 'http://127.0.0.1:8765/').href;
 const out = process.argv[2] || '.taste-skill/paper';
 mkdirSync(out, { recursive:true });
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -20,9 +21,9 @@ try {
   await page.eval(`document.getElementById('preview-start').click()`);
 
   // A PDF link imports the HTML version with its formulas and figures.
-  await page.eval(`(() => { window.confirm = () => true; document.getElementById('nav-import').click(); document.getElementById('arxiv-url').value = ${JSON.stringify(process.env.LINGTYPE_ARXIV || 'https://arxiv.org/pdf/2611.05306')}; document.getElementById('arxiv-form').requestSubmit(); })()`);
+  await page.eval(`(() => { window.confirm = () => true; document.getElementById('shelf-import').click(); document.getElementById('arxiv-url').value = ${JSON.stringify(process.env.LINGTYPE_ARXIV || 'https://arxiv.org/pdf/2611.05306')}; document.getElementById('arxiv-form').requestSubmit(); })()`);
   await until(`/25/.test(document.getElementById('arxiv-message').textContent)`);
-  await page.eval(`document.getElementById('nav-practice').click()`);
+  await page.eval(`(location.hash = 'practice')`);
   // An import opens the chooser with the new lesson; start it.
   await until(`document.getElementById('lesson-chooser')?.hidden === false`);
   await page.eval(`document.getElementById('preview-start').click()`);
@@ -101,12 +102,12 @@ try {
 
   // An uploaded PDF shows each page beside its text (set LINGTYPE_PDF to a PDF file with at least three pages of text).
   if (process.env.LINGTYPE_PDF) {
-    await page.eval(`(() => { window.confirm = () => true; document.getElementById('nav-import').click(); })()`);
+    await page.eval(`(() => { window.confirm = () => true; document.getElementById('shelf-import').click(); })()`);
     const { result } = await page.send('Runtime.evaluate', { expression:`document.getElementById('document-file')` });
     await page.send('DOM.getDocument', {});
     await page.send('DOM.setFileInputFiles', { objectId:result.objectId, files:[process.env.LINGTYPE_PDF] });
     await until(`/已匯入/.test(document.getElementById('workbook-message').textContent)`);
-    await page.eval(`document.getElementById('nav-practice').click()`);
+    await page.eval(`(location.hash = 'practice')`);
     await until(`document.getElementById('lesson-chooser')?.hidden === false`);
     await page.eval(`document.getElementById('preview-start').click()`);
     await until(`[...document.getElementById('section-mode').options].some(o => o.textContent === 'p. 3')`);

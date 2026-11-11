@@ -2,6 +2,7 @@ import io
 
 NL = chr(10)
 import json
+from email.message import Message
 import sys
 import tempfile
 import threading
@@ -54,6 +55,23 @@ class FileImportTests(unittest.TestCase):
         result = extract_file('notes.md', 'First line\nstill first.\n\n\nSecond paragraph.'.encode())
         self.assertEqual(result, {'title': 'notes', 'text': 'First line still first.\n\nSecond paragraph.'})
 
+    def test_common_legacy_text_and_bom_utf16_keep_their_characters(self):
+        text = '“That’s right,” she said. — Yes.'
+        for name, data in [('story.txt', text.encode('cp1252')), ('story.txt', text.encode('utf-16')),
+                           ('story.txt', text.encode('utf-8-sig'))]:
+            with self.subTest(data=data):
+                self.assertEqual(extract_file(name, data)['text'], text)
+        html = '<html><body><main><p>“That’s right,” she said.</p></main></body></html>'.encode('cp1252')
+        self.assertEqual(extract_file('story.html', html)['text'], '“That’s right,” she said.')
+
+    def test_bomless_utf16_english_is_not_imported_with_nul_characters(self):
+        text = 'Hello there. This is a test. Café is open.'
+        for encoding in ('utf-16-le', 'utf-16-be'):
+            with self.subTest(encoding=encoding):
+                self.assertEqual(extract_file('story.txt', text.encode(encoding))['text'], text)
+        # Even-length legacy text has no such zero-byte signature.
+        self.assertEqual(extract_file('story.txt', '“All ready.”'.encode('cp1252'))['text'], '“All ready.”')
+
     def test_html_prefers_the_article_over_menus(self):
         page = '<title>Ignored</title><meta property="og:title" content="The Harbour"><nav><p>Home About Contact Login Register</p></nav><article><h1>The Harbour</h1><p>Boats returned before dusk, one by one.</p><p>The lights flickered across the water all night.</p></article><footer><p>Copyright 2026 all rights reserved here.</p></footer>'
         result = html_to_text(page)
@@ -62,17 +80,79 @@ class FileImportTests(unittest.TestCase):
         self.assertEqual(html_to_text(wiki)['text'], 'Touch typing is a style of typing. It is fast.')
         self.assertEqual(result['text'], 'The Harbour\n\nBoats returned before dusk, one by one.\n\nThe lights flickered across the water all night.')
 
+    def test_short_dialogue_survives_html_file_and_web_import(self):
+        page = b'<html><body><main><h1>A Dialogue</h1><p>Are you ready?</p><p>Yes.</p><p>Let us go.</p></main></body></html>'
+        expected = 'A Dialogue\n\nAre you ready?\n\nYes.\n\nLet us go.'
+        self.assertEqual(extract_file('dialogue.html', page)['text'], expected)
+        response = io.BytesIO(page)
+        response.headers = Message()
+        response.headers['Content-Type'] = 'text/html; charset=utf-8'
+        opener = SimpleNamespace(open=lambda request, timeout: response)
+        self.assertEqual(importers.fetch_article('https://example.com/dialogue', opener)['text'], expected)
+
+    def test_html_article_keeps_text_in_divs_and_inline_elements(self):
+        page = (b'<html><body><nav>Navigation to other pages</nav><article><h1>Harbour</h1>'
+                b'<div>The boats returned <span>before sunset</span>.</div>'
+                b'<div>Everyone was relieved.</div><script>ignore me</script>'
+                b'<p>They went home safely.</p></article><footer>Copyright belongs here</footer></body></html>')
+        result = extract_file('harbour.html', page)
+        self.assertEqual(result['text'], 'Harbour\n\nThe boats returned before sunset.\n\nEveryone was relieved.\n\nThey went home safely.')
+
+    def test_html_fragment_without_body_keeps_article_text(self):
+        fragment = b'<article><h1>Welcome</h1><div>The whole <span>story</span> is written here.</div><div>A second sentence.</div></article>'
+        self.assertEqual(extract_file('article.html', fragment)['text'],
+                         'Welcome\n\nThe whole story is written here.\n\nA second sentence.')
+
+    def test_web_import_uses_declared_or_legacy_encoding_without_http_charset(self):
+        def read_page(page, content_type='text/html'):
+            response = io.BytesIO(page)
+            response.headers = Message()
+            response.headers['Content-Type'] = content_type
+            return importers.fetch_article('https://example.com/story', SimpleNamespace(open=lambda request, timeout: response))['text']
+        legacy = '<html><body><main><p>“That’s right,” she said.</p></main></body></html>'
+        self.assertEqual(read_page(legacy.encode('cp1252')), '“That’s right,” she said.')
+        declared = '<html><head><meta charset="windows-1251"></head><body><main><p>Привет мир.</p></main></body></html>'
+        self.assertEqual(read_page(declared.encode('cp1251')), 'Привет мир.')
+        self.assertEqual(read_page(legacy.encode('utf-16')), '“That’s right,” she said.')
+
     def test_docx_paragraphs(self):
         document = '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Hello</w:t></w:r><w:r><w:t xml:space="preserve"> world.</w:t></w:r></w:p><w:p><w:r><w:t>Second one.</w:t></w:r></w:p></w:body></w:document>'
         result = extract_file('Essay.docx', zipped({'word/document.xml': document}))
         self.assertEqual(result, {'title': 'Essay', 'text': 'Hello world.\n\nSecond one.'})
+
+    def test_docx_nonbreaking_hyphens_and_carriage_returns(self):
+        document = ('<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+                    '<w:body><w:p><w:r><w:t>A well</w:t><w:noBreakHyphen/><w:t>known</w:t>'
+                    '<w:cr/><w:t>example.</w:t><w:tab/><w:t>Next.</w:t><w:br/><w:t>Done.</w:t>'
+                    '</w:r></w:p></w:body></w:document>')
+        self.assertEqual(extract_file('essay.docx', zipped({'word/document.xml': document}))['text'],
+                         'A well-known example. Next. Done.')
+
+    def test_docx_nested_text_box_is_read_once_in_document_order(self):
+        document = ('<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+                    '<w:body><w:p><w:r><w:t>Before.</w:t><w:txbxContent>'
+                    '<w:p><w:r><w:t>Text box.</w:t></w:r></w:p></w:txbxContent>'
+                    '<w:t>After.</w:t></w:r></w:p><w:p><w:r><w:t>Next.</w:t>'
+                    '</w:r></w:p></w:body></w:document>')
+        self.assertEqual(extract_file('essay.docx', zipped({'word/document.xml': document}))['text'],
+                         'Before.\n\nText box.\n\nAfter.\n\nNext.')
+
+    def test_docx_alternate_content_uses_only_one_rendering(self):
+        document = ('<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+                    'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><w:body><w:p>'
+                    '<mc:AlternateContent><mc:Choice Requires="w14"><w:txbxContent><w:p><w:r><w:t>Choice text.</w:t></w:r></w:p></w:txbxContent></mc:Choice>'
+                    '<mc:Fallback><w:txbxContent><w:p><w:r><w:t>Fallback text.</w:t></w:r></w:p></w:txbxContent></mc:Fallback></mc:AlternateContent>'
+                    '<mc:AlternateContent><mc:Choice Requires="w14"/><mc:Fallback><w:r><w:t>Only fallback.</w:t></w:r></mc:Fallback></mc:AlternateContent>'
+                    '</w:p></w:body></w:document>')
+        self.assertEqual(extract_file('essay.docx', zipped({'word/document.xml': document}))['text'],
+                         'Choice text.\n\nOnly fallback.')
 
     def test_epub_chapters_become_sections_in_reading_order(self):
         chapter = lambda title, body: f'<html><body><h1>{title}</h1><p>{body}</p></body></html>'
         long = 'The quiet morning stretched across the hills and valleys. ' * 8
         book = zipped({
             'META-INF/container.xml': '<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/book.opf"/></rootfiles></container>',
-            'OEBPS/book.opf': '<package xmlns="http://www.idpf.org/2007/opf" xmlns:dc="http://purl.org/dc/elements/1.1/"><metadata><dc:title>A Small Book</dc:title></metadata><manifest><item id="c" href="cover.xhtml"/><item id="b" href="two.xhtml"/><item id="a" href="one.xhtml"/></manifest><spine><itemref idref="c"/><itemref idref="a"/><itemref idref="b"/></spine></package>',
+            'OEBPS/book.opf': '<package xmlns="http://www.idpf.org/2007/opf" xmlns:dc="http://purl.org/dc/elements/1.1/"><metadata><dc:title>A Small Book</dc:title></metadata><manifest><item id="c" href="cover.xhtml"/><item id="b" href="two.xhtml"/><item id="a" href="one.xhtml"/></manifest><spine><itemref idref="c"/><itemref idref="a"/><itemref idref="b"/></spine><guide><reference type="cover" href="cover.xhtml"/></guide></package>',
             'OEBPS/cover.xhtml': '<html><body><p>Cover</p></body></html>',
             'OEBPS/one.xhtml': chapter('Chapter One', long),
             'OEBPS/two.xhtml': chapter('Chapter Two', long),
@@ -82,6 +162,49 @@ class FileImportTests(unittest.TestCase):
         self.assertEqual([section['title'] for section in result['sections']], ['Chapter One', 'Chapter Two'])
         self.assertTrue(result['text'].startswith('Chapter One\n\nThe quiet morning'))
 
+    def test_epub_preserves_short_chapters_and_resolves_encoded_paths(self):
+        book = zipped({
+            'META-INF/container.xml': '<container><rootfile full-path="OPS/book.opf"/></container>',
+            'OPS/book.opf': '<package xmlns="http://www.idpf.org/2007/opf"><manifest><item id="nav" href="nav.xhtml" properties="nav"/><item id="a" href="chapters/Short%20one.xhtml#start"/><item id="b" href="../Other/Two.xhtml"/></manifest><spine><itemref idref="nav"/><itemref idref="a"/><itemref idref="b"/></spine></package>',
+            'OPS/nav.xhtml': '<html><body><p>Navigation list.</p></body></html>',
+            'OPS/chapters/Short one.xhtml': '<html><body><h1>First</h1><p>A short chapter.</p></body></html>',
+            'Other/Two.xhtml': '<html><body><h1>Second</h1><p>Another short chapter.</p><p>Wait!</p><div>Outside <span>the paragraph</span> text.<p>Nested.</p>After nested.</div><h2>References</h2><p>Source [1].</p></body></html>',
+        })
+        result = extract_file('short.epub', book)
+        self.assertEqual([section['title'] for section in result['sections']], ['First', 'Second'])
+        self.assertEqual(result['text'], 'First\n\nA short chapter.\n\nSecond\n\nAnother short chapter.\n\nWait!\n\nOutside the paragraph text.\n\nNested.\n\nAfter nested.\n\nReferences\n\nSource [1].')
+
+    def test_epub_accepts_encoded_colons_in_archive_paths(self):
+        book = zipped({
+            'META-INF/container.xml':'<container><rootfile full-path="OPS%3AArchive/book.opf"/></container>',
+            'OPS:Archive/book.opf':'<package xmlns="http://www.idpf.org/2007/opf"><manifest><item id="a" href="Chapter%3A%20Intro.xhtml"/></manifest><spine><itemref idref="a"/></spine></package>',
+            'OPS:Archive/Chapter: Intro.xhtml':'<html><body><p>Actual chapter text.</p></body></html>',
+        })
+        self.assertEqual(extract_file('book.epub', book)['text'], 'Actual chapter text.')
+
+    def test_epub_keeps_body_text_outside_a_long_article_or_main(self):
+        long = 'The long main passage continues. ' * 20
+        for element in ('article', 'main'):
+            book = zipped({
+                'META-INF/container.xml':'<container><rootfile full-path="book.opf"/></container>',
+                'book.opf':'<package xmlns="http://www.idpf.org/2007/opf"><manifest><item id="chapter" href="chapter.xhtml"/></manifest><spine><itemref idref="chapter"/></spine></package>',
+                'chapter.xhtml':f'<html><body><header><h1>Chapter heading</h1></header><p>Before.</p><{element}><p>{long}</p></{element}><aside>A footnote.</aside><footer>End note.</footer><nav><p>Navigation only.</p></nav><p>After.</p></body></html>',
+            })
+            with self.subTest(element=element):
+                result = extract_file('book.epub', book)
+                self.assertEqual(result['text'], f'Chapter heading\n\nBefore.\n\n{long.strip()}\n\nA footnote.\n\nEnd note.\n\nAfter.')
+
+    def test_epub_rejects_missing_external_and_escaping_spine_paths(self):
+        container = '<container><rootfile full-path="OPS/book.opf"/></container>'
+        for href in ('missing.xhtml', 'https://example.com/chapter.xhtml', 'https%3A%2F%2Fexample.com%2Fchapter.xhtml', '%2e%2e/%2e%2e/outside.xhtml', '/absolute.xhtml', 'bad%5cname.xhtml'):
+            opf = f'<package xmlns="http://www.idpf.org/2007/opf"><manifest><item id="a" href="{href}"/></manifest><spine><itemref idref="a"/></spine></package>'
+            book = zipped({'META-INF/container.xml':container, 'OPS/book.opf':opf, 'outside.xhtml':'<p>Should not import</p>'})
+            with self.subTest(href=href), self.assertRaisesRegex(ValueError, 'EPUB'):
+                extract_file('broken.epub', book)
+        book = zipped({'META-INF/container.xml':'<container><rootfile full-path="%2e%2e/outside.opf"/></container>', '../outside.opf':'<package/>'})
+        with self.assertRaisesRegex(ValueError, 'EPUB'):
+            extract_file('broken.epub', book)
+
     def test_pdf_text(self):
         result = extract_file('paper.pdf', tiny_pdf('Typing builds reading fluency.'))
         self.assertEqual(result['text'], 'Typing builds reading fluency.')
@@ -89,26 +212,94 @@ class FileImportTests(unittest.TestCase):
         self.assertNotIn('sections', result)
         self.assertEqual(result['pages'], [1])
 
-    def test_running_headers_and_page_numbers_are_dropped(self):
-        from importers import without_running_lines
-        pages = ['Paper title\nAlpha one.\n1', 'Paper title\nBeta two.\n2', 'Paper title\nGamma three.\n3']
-        self.assertEqual(without_running_lines(pages), ['Alpha one.', 'Beta two.', 'Gamma three.'])
-        self.assertEqual(without_running_lines(['Only\nOne.', 'Two.']), ['Only\nOne.', 'Two.'])
+    def test_pdf_untagged_repeated_text_and_sequential_numbers_are_preserved(self):
+        pages = [f'Important repeated text.\n{number}\nTemperature {number} degrees.' for number in (1, 2, 3)]
+        class Page:
+            def __init__(self, text): self.text = text
+            def extract_text(self, **_kwargs): return self.text
+        class Reader:
+            def __init__(self, data): self.pages, self.metadata = [Page(text) for text in pages], {}
+        with patch('pypdf.PdfReader', Reader):
+            result = extract_file('measurements.pdf', b'%PDF')
+        for section, number in zip(result['sections'], (1, 2, 3)):
+            self.assertIn('Important repeated text.', section['text'])
+            self.assertIn(f'{number}', section['text'])
+            self.assertIn(f'Temperature {number} degrees.', section['text'])
+        from pypdf import PdfReader, PdfWriter
+        from pypdf.generic import DecodedStreamObject, NameObject
+        writer = PdfWriter()
+        for number in (1, 2, 3):
+            page = PdfReader(io.BytesIO(tiny_pdf('placeholder'))).pages[0]
+            stream = DecodedStreamObject()
+            stream.set_data(f'BT /F1 12 Tf 72 700 Td (Important repeated text.) Tj ET BT /F1 12 Tf 72 680 Td ({number}) Tj ET'.encode())
+            page[NameObject('/Contents')] = stream
+            writer.add_page(page)
+        out = io.BytesIO(); writer.write(out)
+        actual = extract_file('untagged.pdf', out.getvalue())
+        for section, number in zip(actual['sections'], (1, 2, 3)):
+            self.assertIn('Important repeated text.', section['text'])
+            self.assertIn(str(number), section['text'])
 
-    def test_numbers_in_the_text_are_not_taken_for_page_numbers(self):
-        from importers import without_running_lines
-        pages = ['My Paper' + NL + 'Intro text here.' + NL + '1', 'My Paper' + NL + 'more text' + NL + '2', 'My Paper' + NL + 'Total' + NL + '1024' + NL + '3',
-                 'My Paper' + NL + '2024' + NL + 'Results show x.' + NL + '4', 'My Paper' + NL + 'end.' + NL + '5']
-        self.assertEqual(without_running_lines(pages), ['Intro text here.', 'more text', 'Total' + NL + '1024', '2024' + NL + 'Results show x.', 'end.'])
+    def test_pdf_explicit_artifact_can_be_removed_without_losing_body(self):
+        from pypdf import PdfReader, PdfWriter
+        from pypdf.generic import DecodedStreamObject, NameObject
+        page = PdfReader(io.BytesIO(tiny_pdf('placeholder'))).pages[0]
+        stream = DecodedStreamObject()
+        stream.set_data(b'/Artifact BMC BT /F1 12 Tf 72 770 Td (Running header) Tj ET EMC BT /F1 12 Tf 72 700 Td (Important repeated text.) Tj ET BT /F1 12 Tf 72 680 Td (1) Tj ET')
+        page[NameObject('/Contents')] = stream
+        self.assertIn('Running header', page.extract_text())
+        result = importers.pdf_page_text(page)
+        self.assertNotIn('Running header', result)
+        self.assertIn('Important repeated text.', result)
+        self.assertIn('1', result)
+        writer = PdfWriter(); writer.add_page(page)
+        out = io.BytesIO(); writer.write(out)
+        imported = extract_file('tagged.pdf', out.getvalue())
+        self.assertNotIn('Running header', imported['text'])
+        self.assertIn('Important repeated text.', imported['text'])
+        self.assertIn('1', imported['text'])
+
+    def test_pdf_ambiguous_marked_content_falls_back_to_complete_text(self):
+        from pypdf import PdfReader
+        from pypdf.generic import DecodedStreamObject, NameObject
+        page = PdfReader(io.BytesIO(tiny_pdf('placeholder'))).pages[0]
+        stream = DecodedStreamObject()
+        stream.set_data(b'BT /F1 12 Tf 72 700 Td (Before ) Tj /Artifact BMC (uncertain) Tj EMC ( after.) Tj ET')
+        page[NameObject('/Contents')] = stream
+        self.assertEqual(importers.pdf_page_text(page), page.extract_text())
+
+    def test_pdf_misaligned_visitor_text_preserves_full_extraction(self):
+        class Page:
+            def extract_text(self, visitor_text, **_kwargs):
+                visitor_text('only part', None, None, None, None)
+                return 'complete extracted content'
+        self.assertEqual(importers.pdf_page_text(Page()), 'complete extracted content')
 
     def test_a_symbol_drawn_for_a_caption_colon_becomes_a_colon(self):
         from unittest.mock import patch
         class Page:
-            def extract_text(self): return 'Figure 2' + chr(0x22C3) + chr(0xFE00) + ' The burden of context.'
+            def extract_text(self, **_kwargs): return 'Figure 2' + chr(0x22C3) + chr(0xFE00) + ' The burden of context.'
         class Reader:
             def __init__(self, data): self.pages, self.metadata = [Page()], {}
         with patch('pypdf.PdfReader', Reader):
             self.assertEqual(extract_file('paper.pdf', b'%PDF')['text'], 'Figure 2: The burden of context.')
+
+    def test_pdf_line_wrapped_compound_keeps_its_hyphen(self):
+        class Page:
+            def extract_text(self, **_kwargs): return 'A well-\nknown example. A cross-\nsection follows.'
+        class Reader:
+            def __init__(self, data): self.pages, self.metadata = [Page()], {}
+        with patch('pypdf.PdfReader', Reader):
+            self.assertEqual(extract_file('paper.pdf', b'%PDF')['text'], 'A well-known example. A cross-section follows.')
+        from pypdf import PdfReader, PdfWriter
+        from pypdf.generic import DecodedStreamObject, NameObject
+        page = PdfReader(io.BytesIO(tiny_pdf('placeholder'))).pages[0]
+        stream = DecodedStreamObject()
+        stream.set_data(b'BT /F1 12 Tf 72 700 Td (A well-) Tj 0 -20 Td (known example.) Tj ET')
+        page[NameObject('/Contents')] = stream
+        writer = PdfWriter(); writer.add_page(page)
+        out = io.BytesIO(); writer.write(out)
+        self.assertEqual(extract_file('real.pdf', out.getvalue())['text'], 'A well-known example.')
 
     def test_pdf_pages_become_sections_that_remember_their_page(self):
         from pypdf import PdfReader, PdfWriter
@@ -122,15 +313,54 @@ class FileImportTests(unittest.TestCase):
         self.assertEqual(result['text'], 'First page words.\n\nThird page words.')
         self.assertEqual(result['pages'], [1, 3])
 
+    def test_pdf_page_limit_rejects_before_extraction_and_allows_boundary(self):
+        class Page:
+            def __init__(self, text): self.text = text
+            def extract_text(self, **_kwargs): return self.text
+        class Reader:
+            def __init__(self, data):
+                self.pages = [Page('')] * 1999 + [Page('Last page.')]
+                self.metadata = {}
+        with patch('pypdf.PdfReader', Reader):
+            result = importers.pdf_to_text(b'%PDF')
+            self.assertEqual(result['text'], 'Last page.')
+            self.assertEqual(result['pages'], [2000])
+        class NeverExtract:
+            def extract_text(self): raise AssertionError('must reject before extraction')
+        class TooLong:
+            def __init__(self, data): self.pages = [NeverExtract()] * 2001
+        with patch('pypdf.PdfReader', TooLong):
+            with self.assertRaisesRegex(importers.PdfPageLimitError, '2000 頁'):
+                extract_file('book.pdf', b'%PDF')
+
     def test_subtitles_and_rejections(self):
         srt = '1\n00:00:01,000 --> 00:00:02,000\nHello there.\n\n2\n00:00:02,000 --> 00:00:03,000\n<i>General Kenobi.</i>\n'
         self.assertEqual(extract_file('clip.srt', srt.encode())['text'], 'Hello there. General Kenobi.')
+        repeated = ('WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHello.\n\n'
+                    '00:00:01.000 --> 00:00:02.000\nHello.\n\n00:00:01.900 --> 00:00:02.500\nHello.\n\n'
+                    '00:00:02.500 --> 00:00:03.000\nHello.\n\n00:00:03.100 --> 00:00:04.000\nHello.')
+        self.assertEqual(extract_file('clip.vtt', repeated.encode())['text'], 'Hello. Hello. Hello. Hello.')
         with self.assertRaises(ValueError): extract_file('virus.exe', b'MZ')
         with self.assertRaises(ValueError): extract_file('empty.txt', b'   ')
         with self.assertRaises(ValueError): extract_file('broken.docx', b'not a zip')
         bomb = zipped({'word/document.xml': 'x'})
         with patch.object(importers, 'MAX_UNZIPPED', 0):
             with self.assertRaises(ValueError): extract_file('big.docx', bomb)
+
+    def test_subtitles_preserve_parentheticals_and_decode_entities(self):
+        vtt = ('WEBVTT\r\r00:00:01.000 --> 00:00:04.000\r'
+               '<i>I think (perhaps) you &amp; I</i> [both] know 1 &lt; 2.\r')
+        self.assertEqual(extract_file('clip.vtt', vtt.encode())['text'],
+                         'I think (perhaps) you & I [both] know 1 < 2.')
+
+    def test_subtitles_preserve_angle_bracket_text_but_strip_known_markup(self):
+        vtt = ('WEBVTT\n\n00:00:01.000 --> 00:00:04.000\n'
+               '<v Speaker><c.emphasis>3 < 5 > 4</c></v> and <i>bold</i> '
+               '<00:00:02.000> words &lt; 7 &gt; 6; keep <unknown>text</unknown>.\n')
+        self.assertEqual(extract_file('clip.vtt', vtt.encode())['text'],
+                         '3 < 5 > 4 and bold words < 7 > 6; keep <unknown>text</unknown>.')
+        srt = '1\n00:00:01,000 --> 00:00:02,000\n<b>1 < 2 > 0</b>\n'
+        self.assertEqual(extract_file('clip.srt', srt.encode())['text'], '1 < 2 > 0')
 
 
 class WebAndYoutubeTests(unittest.TestCase):
@@ -222,6 +452,23 @@ class WebAndYoutubeTests(unittest.TestCase):
                 return SimpleNamespace(find_manually_created_transcript=lambda l: (_ for _ in ()).throw(LookupError()), find_generated_transcript=lambda l: (_ for _ in ()).throw(LookupError()))
         with self.assertRaises(ValueError): youtube_transcript('https://youtu.be/arj7oStGLkU', api=NoEnglish(), title=lambda video: '')
 
+    def test_youtube_requests_have_timeouts_and_close_on_failure(self):
+        calls = []
+        class Session:
+            def __enter__(self): return self
+            def __exit__(self, *args): calls.append('closed')
+            def request(self, method, url, **kwargs):
+                calls.append(kwargs['timeout'])
+                raise TimeoutError('stalled')
+        class Api:
+            def __init__(self, http_client): self.session = http_client
+            def list(self, video): self.session.request('GET', 'https://www.youtube.com/')
+        modules = {'requests': SimpleNamespace(Session=Session), 'youtube_transcript_api': SimpleNamespace(YouTubeTranscriptApi=Api)}
+        with patch.dict(sys.modules, modules):
+            with self.assertRaisesRegex(ValueError, '稍後重試'):
+                youtube_transcript('https://youtu.be/arj7oStGLkU')
+        self.assertEqual(calls, [(5, 15), 'closed'])
+
 
 
 class ServerRouteTests(unittest.TestCase):
@@ -238,6 +485,21 @@ class ServerRouteTests(unittest.TestCase):
             try:
                 upload = Request(base + '/api/extract?name=' + quote('My essay.docx'), data=zipped({'word/document.xml': document}), headers={'Content-Type': 'application/octet-stream', 'Origin': base})
                 self.assertEqual(json.load(urlopen(upload)), {'title': 'My essay', 'text': 'Uploaded words.'})
+                class TooLong:
+                    def __init__(self, data): self.pages = [None] * 2001
+                with patch('pypdf.PdfReader', TooLong):
+                    pdf = Request(base + '/api/extract?name=book.pdf', data=b'%PDF', headers={'Content-Type':'application/octet-stream', 'Origin':base})
+                    with self.assertRaises(HTTPError) as limit:
+                        urlopen(pdf)
+                    self.assertEqual(limit.exception.code, 400)
+                    self.assertEqual(json.load(limit.exception)['code'], 'pdf_page_limit')
+                    limit.exception.close()
+                epub = zipped({'META-INF/container.xml':'<container><rootfile full-path="OPS/book.opf"/></container>', 'OPS/book.opf':'<package xmlns="http://www.idpf.org/2007/opf"><manifest><item id="a" href="missing.xhtml"/></manifest><spine><itemref idref="a"/></spine></package>'})
+                with self.assertRaises(HTTPError) as missing:
+                    urlopen(Request(base + '/api/extract?name=broken.epub', data=epub, headers={'Content-Type':'application/octet-stream', 'Origin':base}))
+                self.assertEqual(missing.exception.code, 400)
+                self.assertEqual(json.load(missing.exception)['code'], 'epub_spine_invalid')
+                missing.exception.close()
                 with self.assertRaises(HTTPError) as refused:
                     urlopen(base + '/api/import?url=' + quote(base + '/'))
                 self.assertEqual(refused.exception.code, 400)

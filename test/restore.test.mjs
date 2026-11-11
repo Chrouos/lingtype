@@ -5,7 +5,8 @@ import { saveSnapshot, snapshotKey } from '../site/practice.mjs';
 test('reload restores an unfinished error review even when the lesson has no selected words', async () => {
   const elements = new Map();
   class Element extends EventTarget {
-    constructor() { super(); this.value = ''; this.classList = { toggle() {} }; }
+    constructor() { super(); this.value = ''; this.attributes = {}; this.classList = { toggle() {} }; }
+    setAttribute(name, value) { this.attributes[name] = value; }
     append() {}
     focus() {}
     querySelector() { return new Element(); }
@@ -30,6 +31,8 @@ test('reload restores an unfinished error review even when the lesson has no sel
   globalThis.fetch = async () => { throw new Error('offline'); };
   globalThis.confirm = () => true;
   await import('../site/app.mjs');
+  assert.equal(elements.get('word-mode').attributes['aria-pressed'], 'true');
+  assert.equal(elements.get('article-mode').attributes['aria-pressed'], 'false');
   assert.match(elements.get('exercise').innerHTML, />difficult</);
   assert.equal(elements.get('typing').value, 'di');
   assert.equal(elements.get('typing').disabled, true);

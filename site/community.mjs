@@ -9,6 +9,7 @@ export function cleanBooks(books) {
     id:book.id, title:book.title, createdAt:typeof book.createdAt === 'string' ? book.createdAt : '',
     summary:typeof book.summary === 'string' ? book.summary : '', category:typeof book.category === 'string' ? book.category : '',
     words:number(book.words), likes:number(book.likes), reads:number(book.reads), starts:number(book.starts),
+    authors:Array.isArray(book.authors) ? book.authors.filter(author => typeof author === 'string' && author.trim() && [...author].length <= 200).slice(0, 4) : [],
     completions:number(book.completions), practiceCount:number(book.practiceCount), comments:number(book.comments),
     completionRate:Number.isFinite(book.completionRate) ? Math.min(100, Math.max(0, book.completionRate)) : null,
     hasCover:book.hasCover === true,
@@ -61,4 +62,14 @@ export function readVisitor(storage) {
   const id = [...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('');
   try { storage?.setItem('lingtype-visitor', id); } catch { /* counted again on another visit */ }
   return id;
+}
+
+// These credentials must be stored before publishing, so a lost response does
+// not also lose the only authority to remove the newly published workbook.
+export function createPublicationIdentity(crypto = globalThis.crypto) {
+  if (!crypto?.getRandomValues) throw new Error('Secure random numbers unavailable');
+  const bytes = new Uint8Array(48);
+  crypto.getRandomValues(bytes);
+  const hex = [...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('');
+  return { id:hex.slice(0, 32), ownerKey:hex.slice(32) };
 }

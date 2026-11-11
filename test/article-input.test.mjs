@@ -1,7 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-test('article input blocks paste and drop while allowing typing and deletion', async () => {
+test('practice blocks paste and drop while allowing typing and deletion', async () => {
+  const originalPerformance = globalThis.performance;
+  let clock = 1000;
+  globalThis.performance = { now:() => clock };
   const elements = new Map();
   class Element extends EventTarget {
     constructor() { super(); this.value = ''; this.classList = { toggle() {} }; }
@@ -21,12 +24,14 @@ test('article input blocks paste and drop while allowing typing and deletion', a
     get innerHTML() { return this.html; }
   }
   for (const id of ['lesson', 'language', 'exercise', 'result', 'word-mode', 'article-mode', 'restart', 'pause', 'category', 'progress', 'hint', 'passage-label', 'passage-mode', 'section-label', 'section-mode', 'source-info', 'import-form', 'import-title', 'import-text', 'import-translation', 'import-message', 'arxiv-form', 'arxiv-submit', 'arxiv-message', 'arxiv-url', 'word-picker', 'word-search', 'word-candidates', 'selected-words', 'picker-start', 'word-translation-retry', 'word-translation-status', 'live-time', 'live-wpm', 'live-accuracy', 'live-accuracy-label', 'live-progress', 'progress-bar', 'history-list', 'delete-lesson', 'nav-practice', 'nav-import', 'nav-history', 'view-practice', 'view-import', 'view-history', 'finish-now']) elements.set(id, new Element());
+  for (const id of ['document-file', 'workbook-message', 'workspace-notice']) elements.set(id, new Element());
   elements.get('lesson').value = '0';
   elements.get('language').value = 'zh';
   elements.get('passage-mode').value = 'full';
   const saved = {};
   let failNotebookSave = false;
-  globalThis.localStorage = { setItem(key, value) { if (failNotebookSave && key === 'lingtype-notebook') throw new Error('storage full'); saved[key] = value; }, getItem(key) { return saved[key] ?? null; } };
+  let failProgressSave = false;
+  globalThis.localStorage = { setItem(key, value) { if ((failNotebookSave && key === 'lingtype-notebook') || (failProgressSave && key === 'lingtype-progress')) throw new Error('storage full'); saved[key] = value; }, getItem(key) { return saved[key] ?? null; } };
   globalThis.document = { getElementById: id => elements.get(id), createElement: () => new Element(), createTextNode: text => text };
   await import('../site/app.mjs');
   elements.get('article-mode').dispatchEvent(new Event('click'));
@@ -56,11 +61,21 @@ test('article input blocks paste and drop while allowing typing and deletion', a
     typing.dispatchEvent(event);
     assert.equal(event.defaultPrevented, true, `${type} should be blocked`);
   }
+  clock = 2000;
   typing.value = 'T';
   typing.dispatchEvent(new Event('input'));
   assert.equal(typing.value, 'T');
   assert.equal(elements.get('live-accuracy').textContent, '100%');
   assert.equal(elements.get('live-progress').textContent, '1%');
+  // Simulate a throttled timer: the next input arrives after the idle deadline
+  // before the interval callback had a chance to run.
+  clock = 10000;
+  typing.value = 'Th'; typing.dispatchEvent(new Event('input'));
+  elements.get('pause').click();
+  assert.equal(Object.values(JSON.parse(saved['lingtype-progress']))[0].elapsed, 1000);
+  elements.get('pause').click();
+  clock = 11000;
+  typing.value = 'The'; typing.dispatchEvent(new Event('input'));
   elements.get('nav-import').click();
   assert.equal(typing.disabled, true);
   assert.equal(elements.get('view-import').hidden, false);
@@ -124,6 +139,17 @@ test('article input blocks paste and drop while allowing typing and deletion', a
   elements.get('picker-start').dispatchEvent(new Event('click'));
   assert.match(elements.get('exercise').innerHTML, /sentence/);
   assert.match(elements.get('exercise').innerHTML, /class="typing-stage/);
+  for (const type of ['paste', 'drop']) {
+    const event = new Event(type, { cancelable:true });
+    elements.get('typing').dispatchEvent(event);
+    assert.equal(event.defaultPrevented, true, `word practice should block ${type}`);
+  }
+  for (const inputType of ['insertFromPaste', 'insertFromDrop']) {
+    const event = new Event('beforeinput', { cancelable:true });
+    Object.defineProperty(event, 'inputType', { value:inputType });
+    elements.get('typing').dispatchEvent(event);
+    assert.equal(event.defaultPrevented, true, `word practice should block ${inputType}`);
+  }
   elements.get('typing').value = 's'; elements.get('typing').dispatchEvent(new Event('input'));
   assert.match(elements.get('word-text').innerHTML, /class="correct"/);
   globalThis.confirm = () => true;
@@ -134,6 +160,13 @@ test('article input blocks paste and drop while allowing typing and deletion', a
   assert.equal(JSON.parse(saved['lingtype-custom-lessons'])[0].words[0][0], 'sentence');
   assert.ok(Object.keys(JSON.parse(saved['lingtype-progress'])).some(key => JSON.parse(key)[1] === 'word'));
   globalThis.confirm = () => true;
+  const wordsBeforeFailedClear = JSON.parse(saved['lingtype-custom-lessons'])[0].words;
+  failProgressSave = true;
+  candidates.checked = false; candidates.dispatchEvent(new Event('change'));
+  assert.equal(candidates.checked, true, 'a failed progress clear restores the checkbox');
+  assert.deepEqual(JSON.parse(saved['lingtype-custom-lessons'])[0].words, wordsBeforeFailedClear);
+  assert.match(elements.get('hint').textContent, /無法儲存/);
+  failProgressSave = false;
   elements.get('arxiv-url').value = 'https://arxiv.org/html/2610.32770v1';
   elements.get('arxiv-form').dispatchEvent(new Event('submit', { cancelable: true }));
   await new Promise(resolve => setTimeout(resolve, 0));
@@ -176,12 +209,23 @@ test('article input blocks paste and drop while allowing typing and deletion', a
   elements.get('save-selected-words').click();
   assert.equal(JSON.parse(saved['lingtype-custom-lessons'])[1].words[0][0], 'introduction');
   assert.match(elements.get('selection-message').textContent, /已加入/);
+  failNotebookSave = true;
+  globalThis.getSelection = () => ({anchorNode:{}, focusNode:{}, toString:() => 'an'});
+  elements.get('save-selected-words').click();
+  assert.match(elements.get('selection-message').textContent, /無法儲存/);
+  assert.equal(JSON.parse(saved['lingtype-notebook']).some(entry => entry.word === 'an'), false);
+  globalThis.getSelection = () => ({toString:() => ''});
+  elements.get('result').dataset = {pick:'an'};
+  elements.get('result').click();
+  assert.match(elements.get('selection-message').textContent, /無法儲存/);
+  failNotebookSave = false;
   elements.get('retry-errors').dispatchEvent(new Event('click'));
   assert.match(elements.get('exercise').innerHTML, />an</);
   globalThis.confirm = () => true;
   elements.get('restart').dispatchEvent(new Event('click'));
   assert.match(elements.get('exercise').innerHTML, />an</);
   elements.get('delete-lesson').dispatchEvent(new Event('click'));
+  await new Promise(resolve => setTimeout(resolve, 0));
   assert.equal(elements.get('lesson').value, '0');
   assert.match(elements.get('exercise').innerHTML, /gentle/);
 
@@ -207,4 +251,66 @@ test('article input blocks paste and drop while allowing typing and deletion', a
   elements.get('translation-retry').onclick();
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.match(elements.get('article-text').innerHTML, /譯文 Number 0/);
+  const longSingleParagraph = 'A sentence without paragraph breaks. '.repeat(400);
+  elements.get('import-title').value = 'Long single paragraph';
+  elements.get('import-text').value = longSingleParagraph;
+  elements.get('import-form').dispatchEvent(new Event('submit', {cancelable:true}));
+  const imported = JSON.parse(saved['lingtype-custom-lessons']).find(item => item.title === 'Long single paragraph');
+  assert.ok(imported.sections.length > 1);
+  assert.equal(imported.sections.map(section => section.text).join(''), longSingleParagraph.trim());
+  assert.ok(imported.sections.every(section => section.text.length <= 6000));
+  const anchor = 'A figure anchor spanning the split';
+  const paperText = 'z'.repeat(5990) + anchor + '\uE000' + 'z'.repeat(7000);
+  globalThis.fetch = async url => url.startsWith('/api/import?')
+    ? {ok:true, json:async () => ({title:'Long paper', sourceUrl:'https://arxiv.org/html/2610.32770v1', sections:[{title:'Abstract', text:paperText}], figures:[{kind:'figure', label:'Figure 1', anchor, images:['https://arxiv.org/html/2610.32770v1/fig.png']}], formulas:[{tex:'x'}]})}
+    : {ok:true, json:async () => ({translations:[]})};
+  elements.get('arxiv-url').value = 'https://arxiv.org/html/2610.32770v1';
+  elements.get('arxiv-form').dispatchEvent(new Event('submit', {cancelable:true}));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const paper = JSON.parse(saved['lingtype-custom-lessons']).find(item => item.title === 'Long paper');
+  assert.ok(paper.sections.length > 1);
+  assert.equal(paper.sections.map(section => section.text).join(''), paperText);
+  assert.ok(paper.sections.some(section => section.text.includes(anchor)));
+  assert.equal(paper.figures[0].anchor, anchor);
+  elements.get('typing').value = 'z'; elements.get('typing').dispatchEvent(new Event('input'));
+  globalThis.fetch = async url => url.startsWith('/api/import?')
+    ? {ok:true, json:async () => ({title:'Subtitles', sourceUrl:'https://www.youtube.com/watch?v=example', text:'Unique sentence.', sentenceTranslations:{zh:{'Unique sentence.':'字幕譯文'}}})}
+    : {ok:true, json:async () => ({translations:[]})};
+  globalThis.confirm = () => false;
+  elements.get('arxiv-url').value = 'https://www.youtube.com/watch?v=example';
+  elements.get('arxiv-form').dispatchEvent(new Event('submit', {cancelable:true}));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(JSON.parse(saved['lingtype-translations'] || '{}')['zh\u0000Unique sentence.'], undefined, 'cancelled import does not alter the translation cache');
+  globalThis.confirm = () => true;
+  elements.get('arxiv-form').dispatchEvent(new Event('submit', {cancelable:true}));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(JSON.parse(saved['lingtype-translations'])['zh\u0000Unique sentence.'], '字幕譯文');
+  globalThis.fetch = async () => ({ok:false, json:async () => ({error:'PDF 超過 2000 頁', code:'pdf_page_limit'})});
+  for (const [code, expected] of [['zh', /2,000 頁/], ['ja', /2,000 ページ/], ['ko', /2,000페이지/]]) {
+    elements.get('language').value = code;
+    const file = elements.get('document-file'); file.files = [{name:'long.pdf', size:100}];
+    file.dispatchEvent(new Event('change'));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.match(elements.get('workbook-message').textContent, expected);
+  }
+  globalThis.fetch = async () => ({ok:false, json:async () => ({error:'EPUB 章節遺失', code:'epub_spine_invalid'})});
+  for (const [code, expected] of [['zh', /章節路徑無效或檔案遺失/], ['ja', /章のパスが無効/], ['ko', /장의 경로가 잘못/]]) {
+    elements.get('language').value = code;
+    const file = elements.get('document-file'); file.files = [{name:'broken.epub', size:100}];
+    file.dispatchEvent(new Event('change'));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.match(elements.get('workbook-message').textContent, expected);
+  }
+  elements.get('language').value = 'zh';
+  globalThis.fetch = async url => url.startsWith('/api/extract?')
+    ? {ok:true, json:async () => ({title:'PDF text only', text:'Text extracted from the PDF.', pages:[1]})}
+    : {ok:true, json:async () => ({translations:[]})};
+  const pdf = elements.get('document-file'); pdf.files = [{name:'sample.pdf', size:100}];
+  pdf.dispatchEvent(new Event('change'));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.ok(JSON.parse(saved['lingtype-custom-lessons']).some(item => item.title === 'PDF text only'));
+  assert.equal(elements.get('workspace-notice').hidden, false);
+  assert.match(elements.get('workspace-notice').textContent, /無法儲存 PDF 原檔/);
+  elements.get('typing').dispatchEvent(new Event('blur'));
+  globalThis.performance = originalPerformance;
 });

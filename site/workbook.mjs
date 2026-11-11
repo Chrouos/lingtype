@@ -1,7 +1,8 @@
 import { articleWords } from './vocabulary.mjs';
-import { splitSentences } from './data.mjs';
+import { splitSentences, MAX_WORKBOOK_SECTIONS } from './data.mjs';
 import { typeable } from './sentences.mjs';
 import { cleanFigures, cleanFormulas } from './paper.mjs';
+import { safeSourceUrl } from './source-url.mjs';
 
 const maxSize = 2_000_000;
 export function createWorkbook(item, cache = {}) {
@@ -13,19 +14,20 @@ export function createWorkbook(item, cache = {}) {
     }
   }
   return { format:'lingtype-workbook', version:1, lesson:{
-    title:item.title, text:item.text, category:item.category || '分享教材',
+    title:item.title, text:item.text, category:item.category || '分享教材', ...(item.edited === true ? {edited:true} : {}),
     translations:item.translations || {}, words:item.words || [],
     ...(Object.keys(sentenceTranslations).length ? { sentenceTranslations } : {}),
     ...(item.sections?.length ? { sections:item.sections.map(({title,text}) => ({title,text})) } : {}),
     // A PDF's pages stay in this browser; only figures that link to their source travel with a workbook.
     ...(item.formulas?.length ? { formulas:item.formulas } : {}), ...(item.figures?.some(figure => figure.kind !== 'page') ? { figures:item.figures.filter(figure => figure.kind !== 'page') } : {}),
     ...(item.sourceUrl ? { sourceUrl:item.sourceUrl } : {}),
+    ...(Array.isArray(item.authors) ? { authors:item.authors.filter(author => typeof author === 'string' && author.trim() && [...author].length <= 200).slice(0, 5000) } : {}),
     ...(item.source ? { source:item.source } : {}), ...(item.license ? { license:item.license } : {})
   } };
 }
 
 export function readWorkbook(json) {
-  if (typeof json !== 'string' || json.length > maxSize) throw new Error('練習冊過大，請使用 2 MB 以內的檔案。');
+  if (typeof json !== 'string' || json.length > maxSize || new TextEncoder().encode(json).length > maxSize) throw new Error('練習冊過大，請使用 2 MB 以內的檔案。');
   let file; try { file = JSON.parse(json); } catch { throw new Error('練習冊格式無法讀取。'); }
   if (!file || file.format !== 'lingtype-workbook' || file.version !== 1 || !file.lesson || typeof file.lesson !== 'object') throw new Error('練習冊格式不支援。');
   const source = file.lesson;
@@ -57,14 +59,18 @@ export function readWorkbook(json) {
   }
   let sections;
   if (source.sections !== undefined) {
-    if (!Array.isArray(source.sections) || source.sections.length > 1000 || source.sections.some(section => !section || typeof section.title !== 'string' || section.title.length > 200 || typeof section.text !== 'string' || !section.text.trim() || section.text.length > 1_000_000)) throw new Error('練習冊章節格式無效。');
+    if (!Array.isArray(source.sections) || source.sections.length > MAX_WORKBOOK_SECTIONS || source.sections.some(section => !section || typeof section.title !== 'string' || section.title.length > 200 || typeof section.text !== 'string' || !section.text.trim() || section.text.length > 1_000_000)) throw new Error('練習冊章節格式無效。');
     sections = source.sections.map(section => ({title:section.title, text:section.text}));
   }
   let formulas, figures;
   try { formulas = cleanFormulas(source.formulas); figures = cleanFigures(source.figures); } catch { throw new Error('練習冊圖表或公式格式無效。'); }
   const optionalText = value => typeof value === 'string' && value.length <= 500 ? value : '';
-  const sourceUrl = /^https:\/\/arxiv\.org\/html\/\d{4}\.\d{4,5}(?:v\d+)?$/.test(source.sourceUrl || '') ? source.sourceUrl : '';
-  return { custom:true, title:source.title.trim(), category:'分享教材', text:source.text, translations, words:source.words.map(word => [...word]), ...(Object.keys(sentenceTranslations).length ? {sentenceTranslations} : {}), ...(sections?.length ? {sections} : {}), ...(formulas?.length ? {formulas} : {}), ...(figures?.length ? {figures} : {}), ...(sourceUrl ? {sourceUrl} : {}), ...(optionalText(source.source) ? {source:source.source} : {}), ...(optionalText(source.license) ? {license:source.license} : {}) };
+  // Older workbooks could contain unvalidated metadata; keep their text
+  // readable while displaying only bounded author names.
+  const authors = Array.isArray(source.authors) ? source.authors.filter(author => typeof author === 'string' && author.trim() && [...author].length <= 200).slice(0, 5000).map(author => author.trim()) : [];
+  const sourceUrl = safeSourceUrl(source.sourceUrl);
+  const arxivSource = /^https:\/\/arxiv\.org\/html\/\d{4}\.\d{4,5}(?:v\d+)?$/.test(sourceUrl);
+  return { custom:true, title:source.title.trim(), category:source.category === 'arxiv' && arxivSource && source.edited !== true ? 'arxiv' : source.category === 'novel' && source.edited !== true ? 'novel' : '分享教材', ...(source.edited === true ? {edited:true} : {}), text:source.text, translations, words:source.words.map(word => [...word]), ...(Object.keys(sentenceTranslations).length ? {sentenceTranslations} : {}), ...(sections?.length ? {sections} : {}), ...(formulas?.length ? {formulas} : {}), ...(figures?.length ? {figures} : {}), ...(sourceUrl ? {sourceUrl} : {}), ...(authors.length ? {authors} : {}), ...(optionalText(source.source) ? {source:source.source} : {}), ...(optionalText(source.license) ? {license:source.license} : {}) };
 }
 
 export function selectedArticleWords(article, selection) {

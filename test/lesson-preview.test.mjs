@@ -20,3 +20,22 @@ test('a lesson can be previewed before starting practice', () => {
   assert.equal(elements.chooser.hidden, true);
   assert.equal(elements.practice.hidden, false);
 });
+
+test('keyboard focus follows the preview and returns when it closes', () => {
+  const select = new EventTarget(); select.append = () => {}; select.focus = () => { focused = 'select'; };
+  const start = new EventTarget(), back = new EventTarget();
+  const returnFocus = { focus:() => { focused = 'return'; } }, startFocus = { focus:() => { focused = 'practice'; } };
+  let focused = '';
+  const elements = { select, start, back, returnFocus, startFocus, preview:{}, chooser:{ hidden:true }, practice:{ hidden:false } };
+  const preview = setupLessonPreview(elements, () => [{ title:'First', text:'Text' }], () => {}, () => true, () => ({}));
+  preview.open(0);
+  assert.equal(focused, 'select');
+  back.dispatchEvent(new Event('click'));
+  assert.equal(focused, 'return');
+  preview.open(0);
+  start.dispatchEvent(new Event('click'));
+  assert.equal(focused, 'practice');
+  focused = '';
+  preview.open(0, false, false);
+  assert.equal(focused, '', 'initial page load does not steal focus');
+});

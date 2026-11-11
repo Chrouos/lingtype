@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { articleWords, suggestWords, searchWords, nextWordFocus } from '../site/vocabulary.mjs';
+import { articleWords, practicedArticleWords, suggestWords, searchWords, nextWordFocus } from '../site/vocabulary.mjs';
 import { readCustomLessons, addCustomLesson } from '../site/library.mjs';
 
 test('arrow keys move the single word focus without leaving the text', () => {
@@ -13,6 +13,15 @@ test('arrow keys move the single word focus without leaving the text', () => {
 
 test('article words are unique case-insensitively and preserve contractions', () => {
   assert.deepEqual(articleWords("The garden, garden! Don't stop."), ['the', 'garden', "don't", 'stop']);
+});
+
+test('partial article practice credits only whole words, including contractions', () => {
+  const text = "There, don't stop. There";
+  assert.deepEqual(practicedArticleWords(text, 3), []); // 'the' is only a prefix of 'There'
+  assert.deepEqual(practicedArticleWords(text, 5), ['there']);
+  assert.deepEqual(practicedArticleWords(text, 10), ['there']); // 'don' is only part of "don't"
+  assert.deepEqual(practicedArticleWords(text, 12), ['there', "don't"]);
+  assert.deepEqual(practicedArticleWords(text, text.length), ['there', "don't", 'stop']);
 });
 
 test('suggestions exclude common words, stay bounded and search finds other article words', () => {

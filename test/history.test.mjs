@@ -11,3 +11,22 @@ test('history retains the newest ten results and ignores invalid storage', () =>
   assert.equal(history[0].title, 'Lesson 11');
   assert.equal(history.at(-1).title, 'Lesson 2');
 });
+
+test('a temporary read error does not replace saved results', () => {
+  const original = JSON.stringify([{title:'Previous',mode:'article',wpm:42}]);
+  let value = original, failing = true;
+  const storage = {getItem() { if (failing) throw new Error('read error'); return value; }, setItem(_key, next) { value = next; }};
+  assert.equal(saveResult(storage, {title:'New', mode:'article'}), false);
+  assert.equal(value, original);
+  failing = false;
+  assert.equal(saveResult(storage, {title:'New', mode:'article'}), true);
+  assert.equal(readHistory(storage)[1].title, 'Previous');
+});
+
+test('malformed stored result fields remain safe to display', () => {
+  const invalid = {toString:1,valueOf:1};
+  const storage = {getItem:() => JSON.stringify([{title:'Old',mode:'article',date:invalid,wpm:invalid,accuracy:invalid,errors:invalid,elapsed:invalid}])};
+  const [record] = readHistory(storage);
+  assert.doesNotThrow(() => new Date(record.date).toLocaleDateString());
+  for (const field of ['wpm','accuracy','errors','elapsed']) assert.doesNotThrow(() => Number(record[field]));
+});

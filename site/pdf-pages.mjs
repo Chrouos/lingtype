@@ -1,17 +1,17 @@
-// An imported PDF is kept in this browser and its pages are drawn on demand with pdf.js, loaded only when a page is first shown.
-const PDFJS = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.min.mjs';
-const WORKER = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.10.38/pdf.worker.min.mjs';
+// An imported PDF is kept in this browser and drawn on demand with the bundled pdf.js.
+const PDFJS = new URL('./vendor/pdfjs/pdf.min.mjs', import.meta.url).href;
+const WORKER = new URL('./vendor/pdfjs/pdf.worker.min.mjs', import.meta.url).href;
+const CMAPS = new URL('./vendor/pdfjs/cmaps/', import.meta.url).href;
+const FONTS = new URL('./vendor/pdfjs/standard_fonts/', import.meta.url).href;
 const KEEP = 24, OPEN = 3;
 
 export const pdfKey = id => `pdf:${id}`;
 
 let library = null;
 function loadLibrary() {
-  // A worker must come from this page's origin, so the worker code is fetched and started from a blob address.
   library ??= (async () => {
     const lib = await import(PDFJS);
-    const code = await (await fetch(WORKER)).text();
-    lib.GlobalWorkerOptions.workerPort = new Worker(URL.createObjectURL(new Blob([code], { type:'text/javascript' })), { type:'module' });
+    lib.GlobalWorkerOptions.workerSrc = WORKER;
     return lib;
   })().catch(error => { library = null; throw error; });
   return library;
@@ -26,10 +26,10 @@ export function createPageRenderer(readFile, { width = 1200, load = loadLibrary 
         const file = await readFile(id);
         if (!file) return null;
         const lib = await load();
-        return lib.getDocument({ data:new Uint8Array(await file.arrayBuffer()), isEvalSupported:false }).promise;
+        return lib.getDocument({ data:new Uint8Array(await file.arrayBuffer()), isEvalSupported:false, cMapUrl:CMAPS, cMapPacked:true, standardFontDataUrl:FONTS }).promise;
       })();
       documents.set(id, opening);
-      opening.catch(() => documents.delete(id));
+      opening.then(doc => { if (!doc && documents.get(id) === opening) documents.delete(id); }, () => { if (documents.get(id) === opening) documents.delete(id); });
       // Only the few most recently used PDFs stay open.
       while (documents.size > OPEN) {
         const [oldest, doc] = documents.entries().next().value;
@@ -59,7 +59,7 @@ export function createPageRenderer(readFile, { width = 1200, load = loadLibrary 
       if (pages.has(key)) { const kept = pages.get(key); pages.delete(key); pages.set(key, kept); return kept; }
       const drawing = draw(id, number);
       pages.set(key, drawing);
-      drawing.then(url => { if (!url) pages.delete(key); }, () => pages.delete(key));
+      drawing.then(url => { if (!url && pages.get(key) === drawing) pages.delete(key); }, () => { if (pages.get(key) === drawing) pages.delete(key); });
       // Only the most recently shown pages stay drawn.
       while (pages.size > KEEP) {
         const [oldest, url] = pages.entries().next().value;

@@ -22,3 +22,22 @@ test('workspace navigation shows only the selected view and updates its current 
   setupViews(id => nodes.get(id), () => {}, 'history');
   assert.equal(nodes.get('view-history').hidden, false);
 });
+
+test('a page without its own navigation item marks the page it was opened from', () => {
+  const nodes = new Map();
+  class Node extends EventTarget {
+    constructor() { super(); this.hidden = false; this.attributes = {}; }
+    setAttribute(name, value) { this.attributes[name] = value; }
+  }
+  for (const id of ['practice', 'import', 'public', 'shelf']) nodes.set(`view-${id}`, new Node());
+  for (const id of ['public', 'shelf']) nodes.set(`nav-${id}`, new Node());
+  const show = setupViews(id => nodes.get(id), () => {}, 'missing', { practice:'shelf', import:'shelf' });
+  assert.equal(nodes.get('view-practice').hidden, false, 'an unknown page falls back to the first one');
+  assert.equal(nodes.get('nav-shelf').attributes['aria-current'], 'page');
+  show('public');
+  assert.equal(nodes.get('nav-shelf').attributes['aria-current'], 'false');
+  assert.equal(nodes.get('nav-public').attributes['aria-current'], 'page');
+  nodes.get('nav-shelf').dispatchEvent(new Event('click'));
+  assert.equal(nodes.get('view-shelf').hidden, false);
+  assert.equal(nodes.get('view-practice').hidden, true);
+});

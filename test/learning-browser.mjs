@@ -1,6 +1,8 @@
 // Start the local server before running this browser check.
 import assert from 'node:assert/strict';
-import { Browser } from '../.agents/skills/design-taste-frontend/scripts/lib/cdp.mjs';
+import { Browser } from './helpers/browser.mjs';
+// The reader opens at #practice; the home page is the library.
+const base = new URL('#practice', process.env.LINGTYPE_URL || 'http://127.0.0.1:8765/').href;
 const browser = await Browser.launch();
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const ready = async page => {
@@ -12,13 +14,13 @@ const ready = async page => {
 };
 try {
   const page = await browser.newPage();
-  await page.goto('http://127.0.0.1:8765/style.css', {settleMs:300});
+  await page.goto(new URL('style.css', base).href, {settleMs:300});
   await page.eval(`(() => {
     localStorage.setItem('lingtype-custom-lessons', JSON.stringify([{id:'sample',custom:true,title:'Example',text:'A quiet harbour.',translations:{},words:[['harbour','港口','','']]}]));
     localStorage.setItem('lingtype-notebook', JSON.stringify([{word:'harbour',translations:{zh:'港口'},sentences:[{text:'A quiet harbour.',source:'Example'}],added:1,practiced:0,missed:0}]));
     localStorage.setItem('lingtype-last-practice', JSON.stringify({id:'sample',mode:'article',section:'all',passage:'full'}));
   })()`);
-  await page.goto('http://127.0.0.1:8765/', {settleMs:1200});
+  await page.goto(base, {settleMs:1200});
   await ready(page);
   await page.eval(`(() => { document.getElementById('preview-start').click(); document.getElementById('edit-translation').click(); })()`);
   assert.equal(await page.eval(`document.getElementById('translation-original').textContent`), 'A quiet harbour.');
@@ -30,7 +32,7 @@ try {
   await page.eval(`document.getElementById('edit-translation').click()`);
   await page.eval(`(() => { document.getElementById('translation-input').value='安靜的海港。'; document.getElementById('translation-form').requestSubmit(); })()`);
   assert.match(await page.eval(`document.getElementById('article-text').textContent`), /安靜的海港/);
-  await page.goto('http://127.0.0.1:8765/', {settleMs:1000});
+  await page.goto(base, {settleMs:1000});
   await ready(page);
   await page.eval(`document.getElementById('preview-start').click()`);
   assert.match(await page.eval(`document.getElementById('article-text').textContent`), /安靜的海港/);
@@ -61,14 +63,17 @@ try {
   await page.eval(`document.getElementById('translation-cancel').click()`);
   await page.eval(`(() => { window.confirm=()=>false; document.querySelector('[data-remove-note="harbour"]').click(); })()`);
   assert.equal(await page.eval(`JSON.parse(localStorage.getItem('lingtype-notebook')).length`), 1);
-  await page.eval(`(() => { window.confirm=()=>true; document.querySelector('[data-remove-note="harbour"]').click(); })()`);
+  await page.eval(`(() => { window.confirm=()=>true; document.querySelector('[data-remove-note="harbour"]').focus(); })()`);
+  for (const type of ['keyDown', 'keyUp']) await page.send('Input.dispatchKeyEvent', { type, key:'Enter', code:'Enter', windowsVirtualKeyCode:13, ...(type === 'keyDown' ? { text:'\r' } : {}) });
+  assert.equal(await page.eval(`document.activeElement.id`), 'notebook-undo');
   assert.equal(await page.eval(`JSON.parse(localStorage.getItem('lingtype-notebook')).length`), 0);
   const remaining = await page.eval(`new Promise((resolve,reject)=>{ const open=indexedDB.open('lingtype-data'); open.onsuccess=()=>{const r=open.result.transaction('values').objectStore('values').get('lingtype-custom-lessons'); r.onsuccess=()=>{open.result.close(); resolve(r.result)}; r.onerror=()=>reject(r.error)}; open.onerror=()=>reject(open.error) })`);
   assert.equal(JSON.parse(remaining)[0].words[0][0], 'harbour');
-  await page.eval(`document.getElementById('notebook-undo').click()`);
+  for (const type of ['keyDown', 'keyUp']) await page.send('Input.dispatchKeyEvent', { type, key:'Enter', code:'Enter', windowsVirtualKeyCode:13, ...(type === 'keyDown' ? { text:'\r' } : {}) });
+  assert.equal(await page.eval(`document.activeElement.dataset.removeNote`), 'harbour');
   assert.equal(await page.eval(`JSON.parse(localStorage.getItem('lingtype-notebook'))[0].word`), 'harbour');
   assert.equal(await page.eval(`JSON.parse(localStorage.getItem('lingtype-notebook'))[0].reviewIntervalDays`), 1);
-  await page.eval(`(() => { document.querySelector('[data-remove-note="harbour"]').click(); document.getElementById('nav-practice').click(); const s=document.getElementById('lesson'); s.value=[...s.options].find(o=>o.textContent==='Example').value; s.dispatchEvent(new Event('change')); document.getElementById('finish-now').click(); })()`);
+  await page.eval(`(() => { document.querySelector('[data-remove-note="harbour"]').click(); (location.hash = 'practice'); const s=document.getElementById('lesson'); s.value=[...s.options].find(o=>o.textContent==='Example').value; s.dispatchEvent(new Event('change')); document.getElementById('finish-now').click(); })()`);
   const count = await page.eval(`document.querySelectorAll('#review-text .pick[tabindex="0"]').length`);
   assert.equal(count, 1);
   assert.equal(await page.eval(`document.querySelector('#review-text [data-pick="harbour"]').getAttribute('aria-pressed')`), 'false');
@@ -82,10 +87,9 @@ try {
   await page.send('Input.dispatchKeyEvent', {type:'keyUp', key:'ArrowRight', code:'ArrowRight', windowsVirtualKeyCode:39});
   assert.equal(await page.eval(`document.activeElement.textContent`), 'quiet');
   assert.equal(await page.eval(`document.querySelectorAll('#review-text .pick[tabindex="0"]').length`), 1);
-  assert.equal(await page.eval(`document.getElementById('scope-settings').open`), false);
-  await page.eval(`document.querySelector('#scope-settings summary').click()`);
-  assert.equal(await page.eval(`document.getElementById('scope-settings').open`), true);
-  assert.ok(await page.eval(`document.getElementById('passage-mode').getBoundingClientRect().height > 0`));
+  // On a phone the book's contents replace the range settings.
+  assert.ok(await page.eval(`document.getElementById('choose-lesson').getBoundingClientRect().height > 0`));
+  assert.equal(await page.eval(`document.getElementById('passage-mode').getBoundingClientRect().height`), 0);
   await page.close();
   process.stdout.write('Sentence and word edits and review schedule passed in browser\n');
 } finally { await browser.close(); }

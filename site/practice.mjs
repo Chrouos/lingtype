@@ -1,35 +1,50 @@
 const key = 'lingtype-progress';
-export const snapshotKey = (id, mode, section, passage) => JSON.stringify([id, mode, section, passage]);
+export const snapshotKey = (id, mode, section, passage, scope = null) => JSON.stringify(scope ? [id, mode, section, passage, scope] : [id, mode, section, passage]);
 function readAll(storage) {
-  try { const value = JSON.parse(storage?.getItem(key) || '{}'); return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; } catch { return {}; }
+  try { const value = JSON.parse(storage?.getItem(key) || '{}'); return value && typeof value === 'object' && !Array.isArray(value) ? value : null; } catch { return null; }
 }
-export function readSnapshot(storage, id) { return readAll(storage)[id] || null; }
+export function readSnapshot(storage, id) { return readAll(storage)?.[id] || null; }
+export function hasSnapshot(storage, id) { const data = readAll(storage); return data ? Boolean(data[id]) : null; }
 export function saveSnapshot(storage, id, value) {
-  const data = readAll(storage); delete data[id]; data[id] = value;
+  const data = readAll(storage); if (!data) return false; delete data[id]; data[id] = value;
   try { storage?.setItem(key, JSON.stringify(data)); return true; } catch { return false; }
 }
 export function lastArticleScope(storage, lessonId) {
-  for (const id of Object.keys(readAll(storage)).reverse()) {
+  for (const id of Object.keys(readAll(storage) || {}).reverse()) {
     try {
       const parts = JSON.parse(id);
-      if (Array.isArray(parts) && parts.length === 4 && parts[0] === lessonId && parts[1] === 'article' && typeof parts[2] === 'string' && ['full', 'random'].includes(parts[3])) return { section:parts[2], passage:parts[3] };
+      if (Array.isArray(parts) && (parts.length === 4 || (parts.length === 5 && /^part:\d+$/.test(parts[4]))) && parts[0] === lessonId && parts[1] === 'article' && typeof parts[2] === 'string' && ['full', 'random'].includes(parts[3])) return { section:parts[2], passage:parts[3] };
+      // Reading on from a chosen paragraph to the end of its section.
+      if (Array.isArray(parts) && parts.length === 5 && parts[0] === lessonId && parts[1] === 'article' && typeof parts[2] === 'string' && parts[3] === 'from' && /^from:\d+$/.test(parts[4])) return { section:parts[2], passage:'from', index:Number(parts[4].slice(5)) };
     } catch { /* ignore unrelated keys */ }
   }
   return null;
 }
+export function randomPassageSnapshots(storage, lessonId, section) {
+  return Object.entries(readAll(storage) || {}).flatMap(([id, value]) => {
+    try {
+      const parts = JSON.parse(id);
+      if (!Array.isArray(parts) || parts[0] !== lessonId || parts[1] !== 'article' || parts[2] !== section || parts[3] !== 'random' || (parts.length !== 4 && !(parts.length === 5 && /^part:\d+$/.test(parts[4])))) return [];
+      return [{ key:id, value, index:parts.length === 5 ? Number(parts[4].slice(5)) : value?.articlePassageIndex }];
+    } catch { return []; }
+  });
+}
 export function clearSnapshot(storage, id) {
-  const data = readAll(storage); delete data[id];
+  const data = readAll(storage); if (!data) return false; delete data[id];
   try { storage?.setItem(key, JSON.stringify(data)); return true; } catch { return false; }
 }
 export function clearModeSnapshots(storage, lessonId, mode) {
   const data = readAll(storage);
+  if (!data) return false;
   for (const id of Object.keys(data)) {
     try { const parts = JSON.parse(id); if (parts[0] === lessonId && parts[1] === mode) delete data[id]; } catch { /* ignore unrelated keys */ }
   }
   try { storage?.setItem(key, JSON.stringify(data)); return true; } catch { return false; }
 }
 export function hasModeSnapshots(storage, lessonId, mode) {
-  return Object.keys(readAll(storage)).some(id => {
+  const data = readAll(storage);
+  if (!data) return true;
+  return Object.keys(data).some(id => {
     try { const parts = JSON.parse(id); return parts[0] === lessonId && parts[1] === mode; } catch { return false; }
   });
 }
@@ -46,7 +61,8 @@ export function wrongWordAt(text, position) {
   return text.slice(start, end).toLowerCase().replace('’', "'");
 }
 export function comparison(history, current) {
-  const prior = history.filter(item => item.lessonId === current.lessonId && item.mode === current.mode && item.passage === current.passage && Number.isFinite(item.wpm));
+  if (current.partial) return null;
+  const prior = history.filter(item => item.lessonId === current.lessonId && item.mode === current.mode && item.passage === current.passage && !item.partial && Number.isFinite(item.wpm));
   if (!prior.length) return null;
   return { previous:prior[0].wpm, best:Math.max(...prior.map(item => item.wpm)), delta:Math.round((current.wpm - prior[0].wpm) * 10) / 10 };
 }
@@ -56,14 +72,19 @@ function bestKey(record) {
   return JSON.stringify([record.lessonId, record.mode, record.passage.length, hash >>> 0]);
 }
 function readBests(storage) {
-  try { const value = JSON.parse(storage?.getItem('lingtype-best-results') || '{}'); return value && typeof value === 'object' ? value : {}; } catch { return {}; }
+  let raw;
+  try { raw = storage?.getItem('lingtype-best-results'); } catch { return null; }
+  try { const value = JSON.parse(raw || '{}'); return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; } catch { return {}; }
 }
 export function bestResult(storage, record) {
-  const value = readBests(storage)[bestKey(record)];
+  if (record.partial) return null;
+  const value = readBests(storage)?.[bestKey(record)];
   return Number.isFinite(value) ? value : null;
 }
 export function saveBest(storage, record) {
+  if (record.partial) return true;
   const values = readBests(storage), id = bestKey(record);
-  values[id] = Math.max(values[id] ?? 0, record.wpm);
+  if (!values) return false;
+  values[id] = Math.max(Number.isFinite(values[id]) ? values[id] : 0, record.wpm);
   try { storage?.setItem('lingtype-best-results', JSON.stringify(values)); return true; } catch { return false; }
 }

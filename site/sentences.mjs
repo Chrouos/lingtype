@@ -1,3 +1,5 @@
+import { splitSentences } from './data.mjs';
+
 export function sentenceAt(sentences, cursor) {
   let start = 0;
   for (let index = 0; index < sentences.length; index++) {
@@ -84,7 +86,7 @@ export function separatorPositions(sentences) {
 
 export function alignedTranslations(sentences, text, language) {
   if (!text?.trim()) return null;
-  const translated = [...new Intl.Segmenter(language, { granularity:'sentence' }).segment(text)].map(part => part.segment.trim()).filter(Boolean);
+  const translated = splitSentences(text, language).map(part => part.trim()).filter(Boolean);
   return translated.length === sentences.length ? translated : null;
 }
 
