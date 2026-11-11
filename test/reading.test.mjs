@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readReading, noteReading, forgetReading, readingSections, partOffsets, readingSpan, bookProgress, nextUnread, validReadingData } from '../site/reading.mjs';
+import { readReading, noteReading, forgetReading, readingSections, partOffsets, readingSpan, bookProgress, nextUnread, validReadingData, readingChapters, chapterPlace, partUnit, bookUnit } from '../site/reading.mjs';
 
 const memory = () => { const data = {}; return { getItem:key => data[key] ?? null, setItem:(key, value) => { data[key] = String(value); }, data }; };
 const book = { id:'b', title:'Book', text:'One.\n\nTwo.\n\nThree.\n\nFour.', sections:[{ title:'I', text:'One.\n\nTwo.' }, { title:'II', text:'Three.\n\nFour.' }] };
@@ -48,4 +48,15 @@ test('continuing finds the next unread paragraph after the bookmark, then earlie
   assert.equal(nextUnread(book, { section:'1', at:2, read:{ 0:[0, 1], 1:[0, 1] } }), null);
   const plain = { title:'Plain', text:'A.\n\nB.' };
   assert.deepEqual(nextUnread(plain, { section:'all', at:1, read:{ all:[1] } }), { section:'all', index:0 });
+});
+
+test('a chapter kept in parts reads as one chapter, numbered through its parts', () => {
+  const novel = { title:'Novel', text:'x', sections:[{ title:'Chapter I (1)', text:'A.\n\nB.' }, { title:'Chapter I (2)', text:'C.\n\nD.\n\nE.' }, { title:'Chapter II', text:'F.\n\nG.' }, { title:'Notes (2)', text:'H.\n\nI.' }] };
+  const chapters = readingChapters(novel);
+  assert.deepEqual(chapters.map(chapter => [chapter.title, chapter.count, chapter.parts.map(part => [part.value, part.first])]), [['Chapter I', 5, [['0', 0], ['1', 2]]], ['Chapter II', 2, [['2', 0]]], ['Notes (2)', 2, [['3', 0]]]]);
+  assert.deepEqual(chapterPlace(novel, '1', 1), { title:'Chapter I', n:4, total:5, unit:'paragraph', last:true, single:false });
+  assert.equal(chapterPlace(novel, '0', 0).last, false);
+  assert.equal(partUnit('One. Two.'), 'sentence');
+  assert.equal(bookUnit({ title:'Short', text:'One. Two.' }), 'sentence');
+  assert.equal(bookUnit(novel), 'paragraph');
 });

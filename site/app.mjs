@@ -25,7 +25,7 @@ import { caretScrollOffset } from './caret-viewport.mjs';
 import { createCommentTracker } from './comment-pending.mjs';
 import { createCoverUploadQueue } from './cover-upload.mjs';
 import { mountIcons } from './icons.mjs';
-import { readReading, noteReading, forgetReading, readingSections, partOffsets, readingSpan, bookProgress, nextUnread } from './reading.mjs';
+import { readReading, noteReading, forgetReading, readingSections, partOffsets, readingSpan, bookProgress, nextUnread, readingChapters, chapterPlace, bookUnit } from './reading.mjs';
 
 const $ = (id) => document.getElementById(id);
 const editorLock = await acquireEditorLock(globalThis.navigator?.locks);
@@ -232,13 +232,24 @@ function noteCurrentReading(complete = false) {
   return noteReading(storage, activeSettings.id, { section:activeSettings.section, at:complete ? span.at + 1 : span.at, read:span.read, scope });
 }
 function readerPart() { return readingTracked ? readingSpan(articleOffsets, articleBase, articleBase + input.length).at : null; }
+// "第 3 段", or "第 3 句" in a text read sentence by sentence; with a total, "第 3／48 段".
+const unitText = (unit, n, total = null) => t(`book.${unit === 'sentence' ? 'sentence' : 'part'}${total === null ? '' : 'Of'}`, { n, total });
+function readerPlaceOf(part) {
+  return part === null || !activeSettings ? null : chapterPlace(lesson(), activeSettings.section, part);
+}
+// What a section just finished is called: its chapter, or how far into the chapter it reached.
+function readerPlace() {
+  const place = readerPlaceOf(readerPart());
+  if (!place) return lesson()?.title || '';
+  if (place.last && !place.single) return place.title;
+  return [place.single ? '' : place.title, unitText(place.unit, place.n, place.total)].filter(Boolean).join(' · ');
+}
 function renderReaderHeading() {
   const item = lesson();
   if ($('reader-title')) $('reader-title').textContent = item?.title || '';
   const crumb = $('reader-crumb'); if (!crumb || !item) return;
-  const part = mode === 'article' ? readerPart() : null;
-  const section = item.sections && activeSettings?.section !== 'all' ? item.sections[Number(activeSettings?.section)] : null;
-  crumb.textContent = mode === 'word' ? t('mode.word') : [section?.title, part === null ? '' : t('book.partOf', { n:part + 1, total:articleOffsets.length })].filter(Boolean).join(' · ');
+  const place = mode === 'article' ? readerPlaceOf(readerPart()) : null;
+  crumb.textContent = mode === 'word' ? t('mode.word') : place ? [place.single ? '' : place.title, unitText(place.unit, place.n, place.total)].filter(Boolean).join(' · ') : '';
 }
 function scheduleProgress() { clearTimeout(saveTimer); saveTimer = setTimeout(saveProgress, 400); }
 function mayLeave() { return finished || (!input && !wordIndex && !errors) || typeof globalThis.confirm !== 'function' || globalThis.confirm(t('confirm.leave')); }
@@ -622,7 +633,7 @@ function onArticle(e) {
   if (input.length >= articleText.length) completeArticle(); else scheduleProgress();
 }
 // An early finish scores only what was typed and keeps the place, so practice can continue from it.
-function finish(early = false) {
+function finish(early = false, carryOn = null) {
   const notebookStored = notePractice(mode === 'word' ? currentWords().slice(0, early ? wordIndex : undefined).map(word => word[0]) : practicedArticleWords(articleText, early ? input.length : articleText.length));
   const progressStored = early ? saveProgress() : clearSnapshot(storage, activeKey);
   unfinishedSavePending = early && !progressStored;
@@ -638,6 +649,21 @@ function finish(early = false) {
   const hasProgress = mode === 'article' ? input.length > 0 : wordIndex > 0 || input.length > 0 || errors > 0;
   const bestStored = !hasProgress || saveBest(storage, record);
   const historyStored = !hasProgress || saveResult(storage, record);
+  // Reading a book goes straight on to the next section, adding up the
+  // session; the result waits until the reader stops or the book ends. Any
+  // failed save shows the result instead, so the reader sees the warning.
+  if (carryOn && progressStored && bestStored && historyStored && notebookStored) {
+    const counts = typedCounts(articleText, input, autoSeparators), place = readerPlace();
+    session.pieces++; session.correct += counts.correct; session.total += counts.total; session.time += time;
+    wrongWords.forEach(word => session.wrong.add(word));
+    keepSession = true;
+    try { carryOn.run(); } finally { keepSession = false; }
+    announce(t('reading.done', { place, wpm:resultStats.wpm, accuracy:resultStats.accuracy }));
+    renderHistory();
+    if (paused) resumePractice(); else $('typing')?.focus();
+    updateMetrics();
+    return;
+  }
   const wordCount = currentWords().length, practicedText = articleText;
   const multi = mode === 'article' && session.pieces > 0;
   const counts = mode === 'article' ? typedCounts(early ? articleText.slice(0, input.length) : articleText, input, autoSeparators) : null;
@@ -730,9 +756,10 @@ function articleContinuation() {
   if (!item.notebook) return { kind:'book', run:() => { lessonPreview?.open(Number(lessonSelect.value), false); } };
   return { kind:'lesson', run:() => { lessonSelect.value = String((Number(lessonSelect.value) + 1) % lessons.length); if (item.notebook && !notebook.length) syncNotebookLesson(); updateSections(); pickerPage = 0; loadPractice(); } };
 }
-// Finish this passage before offering another one.
+// A book reads on through its sections; anything else shows its result.
 function completeArticle() {
-  finish();
+  const next = readingTracked && !lesson().notebook ? articleContinuation() : null;
+  finish(false, next?.kind === 'passage' ? next : null);
 }
 function notePractice(words) {
   if (!notebook.length) return true;
@@ -2101,20 +2128,23 @@ function bookCover(item, size = '') {
 }
 // A section lists its paragraphs a page at a time, starting with the page to continue from.
 const TOC_PAGE = 200;
-function tocParts(item, section, entry, target, from = null) {
+function tocParts(item, section, entry, target, from = null, first = section.first || 0) {
   const parts = passageParts(section.source), read = new Set(entry?.read?.[section.value] || []);
   const start = Number.isInteger(from) ? Math.max(0, Math.min(from, parts.length - 1)) : target?.section === section.value ? Math.floor(target.index / TOC_PAGE) * TOC_PAGE : 0;
   const end = Math.min(parts.length, start + TOC_PAGE);
-  const page = to => `<li><button type="button" class="btn-quiet toc-more" data-toc-section="${section.value}" data-toc-from="${to}">${escapeHtml(t('book.showParts', { from:to + 1, to:Math.min(parts.length, to + TOC_PAGE) }))}</button></li>`;
+  const page = to => `<li><button type="button" class="btn-quiet toc-more" data-toc-section="${section.value}" data-toc-from="${to}">${escapeHtml(t('book.showParts', { from:first + to + 1, to:first + Math.min(parts.length, to + TOC_PAGE) }))}</button></li>`;
   const rows = parts.slice(start, end).map((part, offset) => {
     const index = start + offset, state = target?.section === section.value && target.index === index ? 'here' : read.has(index) ? 'read' : '';
-    return `<li><button type="button" class="toc-part${state ? ` ${state}` : ''}" data-section="${section.value}" data-index="${index}"><span class="toc-n">${index + 1}</span><span class="toc-text">${escapeHtml(plainText(part, item.formulas))}</span>${state ? `<span class="toc-state">${escapeHtml(t(state === 'here' ? 'book.here' : 'book.read'))}</span>` : ''}</button></li>`;
+    return `<li><button type="button" class="toc-part${state ? ` ${state}` : ''}" data-section="${section.value}" data-index="${index}"><span class="toc-n">${first + index + 1}</span><span class="toc-text">${escapeHtml(plainText(part, item.formulas))}</span>${state ? `<span class="toc-state">${escapeHtml(t(state === 'here' ? 'book.here' : 'book.read'))}</span>` : ''}</button></li>`;
   });
   return [start > 0 ? page(Math.max(0, start - TOC_PAGE)) : '', ...rows, end < parts.length ? page(end) : ''].join('');
 }
 function placeText(item, target) {
-  const sections = readingSections(item), section = sections.find(candidate => candidate.value === target.section);
-  return [sections.length > 1 ? section?.title : '', t('book.part', { n:target.index + 1 })].filter(Boolean).join(' · ');
+  const place = chapterPlace(item, target.section, target.index);
+  return place ? [place.single ? '' : place.title, unitText(place.unit, place.n)].filter(Boolean).join(' · ') : '';
+}
+function chapterLists(item, chapter, entry, target) {
+  return chapter.parts.map(part => `<ol class="toc-parts">${tocParts(item, part, entry, target)}</ol>`).join('');
 }
 function renderBookPage(item) {
   if (!item || !$('lesson-preview')) return;
@@ -2132,7 +2162,7 @@ function renderBookPage(item) {
     meta.hidden = !meta.textContent;
   }
   if ($('book-progress')) $('book-progress').value = progress.percent;
-  if ($('book-progress-text')) $('book-progress-text').textContent = t('book.progress', progress);
+  if ($('book-progress-text')) $('book-progress-text').textContent = t(bookUnit(item) === 'sentence' ? 'book.progressSentence' : 'book.progress', progress);
   if ($('book-where')) $('book-where').textContent = !entry ? t('book.notStarted') : target ? t('book.next', { place:placeText(item, target) }) : t('book.finished');
   const startLabel = $('preview-start-label') || $('preview-start');
   if (startLabel) startLabel.textContent = t(!entry ? 'book.start' : target ? 'book.continue' : 'book.again');
@@ -2142,10 +2172,11 @@ function renderBookPage(item) {
   if ($('book-share')) $('book-share').hidden = Boolean(item.notebook) || BOOK_ID.test(item.publicId || '');
   const words = $('book-words');
   if (words) { words.hidden = !item.words?.length || Boolean(item.notebook); words.textContent = t('book.words', { n:item.words?.length || 0 }); }
-  const open = target?.section ?? sections[0]?.value;
-  $('lesson-preview').innerHTML = sections.length === 1 ? `<ol class="toc-parts">${tocParts(item, sections[0], entry, target)}</ol>` : sections.map(section => {
-    const count = passageParts(section.source).length, read = (entry?.read?.[section.value] || []).filter(index => index < count).length;
-    return `<details class="toc-section" data-section="${section.value}"${section.value === open ? ' open' : ''}><summary><span class="toc-title">${escapeHtml(section.title)}</span><span class="toc-count${read === count ? ' done' : ''}">${read}／${count}</span></summary>${section.value === open ? `<ol class="toc-parts">${tocParts(item, section, entry, target)}</ol>` : ''}</details>`;
+  const chapters = readingChapters(item);
+  const open = Math.max(0, chapters.findIndex(chapter => chapter.parts.some(part => part.value === target?.section)));
+  $('lesson-preview').innerHTML = chapters.length === 1 ? chapterLists(item, chapters[0], entry, target) : chapters.map((chapter, index) => {
+    const read = chapter.parts.reduce((sum, part) => sum + (entry?.read?.[part.value] || []).filter(n => n < part.count).length, 0);
+    return `<details class="toc-section" data-chapter="${index}"${index === open ? ' open' : ''}><summary><span class="toc-title">${escapeHtml(chapter.title)}</span><span class="toc-count${read === chapter.count ? ' done' : ''}">${read}／${chapter.count}</span></summary>${index === open ? chapterLists(item, chapter, entry, target) : ''}</details>`;
   }).join('');
 }
 function selectBook(index) {
@@ -2235,7 +2266,7 @@ $('lesson-preview')?.addEventListener('click', event => {
   const more = event.target.closest?.('[data-toc-from]');
   if (more) {
     const item = lessons[Number($('preview-lesson').value)], entry = readReading(storage)[item?.id];
-    const section = readingSections(item).find(candidate => candidate.value === more.dataset.tocSection), list = more.closest('.toc-parts');
+    const section = readingChapters(item).flatMap(chapter => chapter.parts).find(candidate => candidate.value === more.dataset.tocSection), list = more.closest('.toc-parts');
     if (section && list) { list.innerHTML = tocParts(item, section, entry, nextUnread(item, entry), Number(more.dataset.tocFrom)); list.querySelector('.toc-part')?.focus(); }
     return;
   }
@@ -2247,9 +2278,8 @@ $('lesson-preview')?.addEventListener('toggle', event => {
   const section = event.target;
   if (!section.open || section.querySelector?.('.toc-parts')) return;
   const item = lessons[Number($('preview-lesson').value)];
-  const entry = readReading(storage)[item?.id], value = section.dataset?.section;
-  const found = readingSections(item).find(candidate => candidate.value === value);
-  if (found) section.insertAdjacentHTML('beforeend', `<ol class="toc-parts">${tocParts(item, found, entry, nextUnread(item, entry))}</ol>`);
+  const entry = readReading(storage)[item?.id], chapter = readingChapters(item)[Number(section.dataset?.chapter)];
+  if (chapter) section.insertAdjacentHTML('beforeend', chapterLists(item, chapter, entry, nextUnread(item, entry)));
 }, true);
 $('book-restart')?.addEventListener('click', () => {
   const index = Number($('preview-lesson').value), first = readingSections(lessons[index])[0];

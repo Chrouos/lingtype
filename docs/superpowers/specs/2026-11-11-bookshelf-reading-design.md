@@ -26,8 +26,13 @@ lesson in the list. It felt like a typing drill rather than reading a book.
    paragraph starts reading there.
 5. **Reader (`#practice`).** The heading shows the book, section and
    paragraph ("Chapter III · 第 3／48 段"); "目錄" returns to the book page.
-   Reading from a paragraph runs to the end of its section; Enter then reads
-   the next section; the end of the book returns to the book page.
+   Reading from a paragraph runs to the end of its section and carries
+   straight on to the next one, with a short notice naming the finished
+   section, its WPM and accuracy. The result, with the session's totals,
+   appears when the reader stops (Esc) or the book ends, then the book page.
+   A chapter stored in parts ("Chapter I (1)", "(2)", …) is shown as one
+   chapter, numbered through its parts. A text without blank lines between
+   paragraphs is counted in sentences ("第 3 句").
 
 The navigation is 書庫｜我的書櫃｜單字本｜紀錄. The reader and the import page
 have no navigation item of their own and mark 我的書櫃 as current.
@@ -59,6 +64,6 @@ prefetch translations for their first section.
 
 ## Not changed
 
-Per-passage results, word picking, the notebook, sharing snapshots and the
+Word picking, the notebook's per-passage results, sharing snapshots and the
 public statistics work as before. The old section and passage selectors stay
 in the page, hidden, and continue to hold the reader's scope.

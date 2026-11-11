@@ -77,6 +77,27 @@ try {
   await wait(() => document.getElementById('practice-content')?.hidden === false, 'continue');
   assert.equal(await page.eval(() => document.getElementById('typing').value), third.slice(0, 12));
 
+  // A chapter kept in parts reads straight on: no result between parts, numbering carries through the chapter.
+  await page.eval(() => document.getElementById('choose-lesson').click());
+  await wait(() => document.getElementById('lesson-chooser')?.hidden === false, 'contents');
+  // Open every chapter so their paragraphs are listed, then take the first one kept in parts.
+  await page.eval(() => { for (const chapter of document.querySelectorAll('#lesson-preview .toc-section')) chapter.open = true; });
+  await wait(() => [...document.querySelectorAll('#lesson-preview .toc-section')].every(chapter => chapter.querySelector('.toc-parts')), 'chapter lists');
+  const chapterIndex = await page.eval(() => [...document.querySelectorAll('#lesson-preview .toc-section')].findIndex(chapter => chapter.querySelectorAll('.toc-parts').length > 1));
+  assert.ok(chapterIndex >= 0, 'a long chapter is kept in parts');
+  const chapterTitle = await page.eval(index => document.querySelectorAll('#lesson-preview .toc-section .toc-title')[index].textContent, chapterIndex);
+  assert.doesNotMatch(chapterTitle, /\(\d+\)$/, 'a chapter in parts is listed once, without part numbers');
+  const last = await page.eval(index => { const row = [...document.querySelectorAll('#lesson-preview .toc-section')[index].querySelectorAll('.toc-parts')[0].querySelectorAll('.toc-part')].at(-1); return { n:Number(row.querySelector('.toc-n').textContent), text:row.querySelector('.toc-text').textContent }; }, chapterIndex);
+  await page.eval(index => { window.confirm = () => true; [...document.querySelectorAll('#lesson-preview .toc-section')[index].querySelectorAll('.toc-parts')[0].querySelectorAll('.toc-part')].at(-1).click(); }, chapterIndex);
+  await wait(() => document.getElementById('practice-content')?.hidden === false && document.getElementById('typing'), 'reading the last paragraph of a part');
+  await page.eval(() => document.getElementById('typing-stage').click());
+  await type(last.text);
+  await wait(() => /讀完/.test(document.getElementById('session-toast')?.textContent || ''), 'section toast');
+  assert.equal(await page.eval(() => document.getElementById('result').hidden), true, 'no result between parts');
+  assert.equal(await page.eval(() => document.getElementById('reader-crumb').textContent.replace(/／\d+ 段$/, '')), `${chapterTitle} · 第 ${last.n + 1}`);
+  assert.equal(await page.eval(() => document.activeElement.id), 'typing');
+  await page.screenshot({ path:`${shots}/3b-carry-on.jpg` });
+
   // Finishing a short book marks it read and returns to its page.
   await page.eval(() => document.getElementById('nav-shelf').click());
   await page.eval(() => [...document.querySelectorAll('#shelf-books .book')].find(node => node.textContent === 'At the coffee shop').click());

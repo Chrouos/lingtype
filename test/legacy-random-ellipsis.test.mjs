@@ -34,7 +34,7 @@ test('legacy progress expands ellipsis before restoring the caret', async () => 
   elements.get('pause').click();
   elements.get('typing').value = 'Wait... Then.';
   elements.get('typing').dispatchEvent(new Event('input'));
-  elements.get('next-action').click();
+  // A finished passage of a book reads straight on to the next one.
   assert.match(elements.get('article-text').innerHTML.replace(/<[^>]+>/g, ''), /Next\./);
   elements.get('typing').value = 'N'; elements.get('typing').dispatchEvent(new Event('input'));
   elements.get('pause').click();

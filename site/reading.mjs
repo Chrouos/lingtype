@@ -111,3 +111,32 @@ export function nextUnread(item, entry) {
   }
   return null;
 }
+
+// A text without blank lines between paragraphs is read sentence by sentence.
+export const partUnit = source => source.split(/\n\s*\n/).filter(part => part.trim()).length > 1 ? 'paragraph' : 'sentence';
+export const bookUnit = item => readingSections(item).every(section => partUnit(section.source) === 'sentence') ? 'sentence' : 'paragraph';
+
+// Long chapters are kept in parts titled "Chapter (1)", "Chapter (2)", …;
+// the reader sees one chapter, numbered through all its parts.
+export function readingChapters(item) {
+  const chapters = [];
+  for (const section of readingSections(item)) {
+    const count = passageParts(section.source).length, match = /^(.*) \((\d+)\)$/.exec(section.title), last = chapters.at(-1);
+    if (match && last?.base === match[1] && Number(match[2]) === last.parts.length + 1) {
+      last.parts.push({ ...section, count, first:last.count }); last.count += count;
+      continue;
+    }
+    const base = match?.[2] === '1' ? match[1] : null;
+    chapters.push({ title:base ?? section.title, base, count, parts:[{ ...section, count, first:0 }] });
+  }
+  return chapters;
+}
+
+// Where a paragraph of a section is in its chapter.
+export function chapterPlace(item, section, index) {
+  for (const chapter of readingChapters(item)) {
+    const part = chapter.parts.find(candidate => candidate.value === section);
+    if (part) return { title:chapter.title, n:part.first + index + 1, total:chapter.count, unit:partUnit(part.source), last:part === chapter.parts.at(-1), single:readingSections(item).length === 1 };
+  }
+  return null;
+}
